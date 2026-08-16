@@ -293,3 +293,85 @@ def test_map_render_is_stable_across_calls(index):
     """Reordering between calls would destroy prompt-cache affinity."""
     m = build_map(index)
     assert m.render() == m.render()
+
+
+# ---------------------------------------------------------------------------
+# Named constants — found by code review.
+#
+# A section citing MAX_RETRIES would have failed validation as a *fabricated
+# anchor* (a hard Gate A failure) purely because the index was narrower than the
+# repository's set of named things.
+# ---------------------------------------------------------------------------
+
+from kreb.index.symbols import extract_symbols  # noqa: E402
+
+
+PY_BINDINGS = b"""
+MAX_RETRIES = 3
+DEFAULT_URL = "https://example"
+
+class Config:
+    TIMEOUT = 30
+
+    def run(self):
+        local_only = 99
+        return local_only
+"""
+
+TS_BINDINGS = b"""
+export const CONFIG = { a: 1 };
+const INTERNAL = 2;
+export class Box {
+  limit = 10;
+  run(): number {
+    const scratch = 5;
+    return scratch;
+  }
+}
+"""
+
+
+def _quals(src: bytes, lang: str) -> dict[str, str]:
+    return {s.qualname: s.kind for s in extract_symbols(src, lang)}
+
+
+def test_python_module_and_class_constants_are_indexed():
+    q = _quals(PY_BINDINGS, "python")
+    assert q.get("MAX_RETRIES") == "constant"
+    assert q.get("DEFAULT_URL") == "constant"
+    assert q.get("Config.TIMEOUT") == "constant"
+
+
+def test_typescript_constants_and_class_fields_are_indexed():
+    q = _quals(TS_BINDINGS, "typescript")
+    assert q.get("CONFIG") == "constant"
+    assert q.get("INTERNAL") == "constant"
+    assert q.get("Box.limit") == "constant"
+
+
+@pytest.mark.parametrize(
+    "src,lang,local_name",
+    [(PY_BINDINGS, "python", "local_only"), (TS_BINDINGS, "typescript", "scratch")],
+)
+def test_function_locals_are_not_indexed(src, lang, local_name):
+    """Locals are not citable definitions; indexing them would invent anchors."""
+    quals = _quals(src, lang)
+    assert not any(local_name in q for q in quals), f"{local_name} leaked into the index"
+
+
+def test_non_identifier_targets_are_skipped():
+    """Destructuring and attribute targets are not definitions."""
+    src = b"a, b = 1, 2\nobj.attr = 3\nd['k'] = 4\nOK = 5\n"
+    quals = _quals(src, "python")
+    assert "OK" in quals
+    for bad in ("a", "b", "attr", "obj.attr", "k"):
+        assert bad not in quals, f"{bad} wrongly indexed as a definition"
+
+
+def test_constants_get_working_hashes():
+    """A constant must participate in staleness like any other symbol."""
+    from kreb.index.hashes import text_hash
+
+    before = [s for s in extract_symbols(b"LIMIT = 3\n", "python") if s.name == "LIMIT"][0]
+    after = [s for s in extract_symbols(b"LIMIT = 5\n", "python") if s.name == "LIMIT"][0]
+    assert text_hash(before) != text_hash(after)

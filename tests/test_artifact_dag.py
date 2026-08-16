@@ -318,3 +318,66 @@ def test_provenance_records_how_it_was_made(store):
     assert prov.usage_cost == 0.0031
     assert prov.validation_attempts == 2, "retry count not recorded (laundering signal)"
     assert prov.trace == [{"ref": "a#X", "text_hash": "h1"}]
+
+
+# ---------------------------------------------------------------------------
+# 7. Regressions found by code review
+# ---------------------------------------------------------------------------
+
+def test_empty_trace_is_not_vacuously_valid():
+    """`all(())` is True, which made a node that recorded nothing permanently fresh."""
+    assert Trace(entries=()).is_valid({"a#X": "anything"}) is False
+
+
+def test_node_with_empty_trace_regenerates(store):
+    calls: list[str] = []
+    key = _gen("no-reads")
+
+    def generate():
+        calls.append("called")
+        return b"payload", Trace(entries=()), Provenance(kind="section", key="")
+
+    store.materialize_generated(key, {}, generate)
+    _, cached = store.materialize_generated(key, {}, generate)
+    assert cached is False, "a node that consulted nothing was served from cache"
+    assert len(calls) == 2
+
+
+def test_artifact_without_provenance_is_not_a_hit(store):
+    """A crash mid-put must not pin a stale artifact forever."""
+    reads = {"a#X": "h1"}
+    key = _gen("retry-policy")
+    store.materialize_generated(key, reads, _writer(b"payload", reads, []))
+
+    store._provenance_path("section", key.digest()).unlink()
+
+    calls: list[str] = []
+    _, cached = store.materialize_generated(key, reads, _writer(b"payload", reads, calls))
+    assert cached is False, "artifact with no provenance was served as a cache hit"
+    assert len(calls) == 1
+
+
+def test_provenance_is_committed_before_the_artifact(store, monkeypatch):
+    """Write ordering is the fix: the artifact's existence implies provenance.
+
+    Simulates a crash after the first write and asserts the surviving state is
+    the harmless one (orphan provenance, artifact absent -> miss), never the
+    dangerous one (artifact present, provenance absent -> unverifiable hit).
+    """
+    reads = {"a#X": "h1"}
+    key = _gen("crashy")
+    real_write = store._write_atomic
+    writes: list[str] = []
+
+    def crash_after_first(path, data):
+        writes.append(path.name)
+        if len(writes) > 1:
+            raise KeyboardInterrupt("simulated crash mid-put")
+        real_write(path, data)
+
+    monkeypatch.setattr(store, "_write_atomic", crash_after_first)
+    with pytest.raises(KeyboardInterrupt):
+        store.materialize_generated(key, reads, _writer(b"payload", reads, []))
+
+    assert writes[0] == "provenance.json", "artifact was written before provenance"
+    assert not store.exists("section", key.digest()), "artifact survived a crashed put"

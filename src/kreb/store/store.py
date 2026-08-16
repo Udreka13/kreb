@@ -104,12 +104,17 @@ class ArtifactStore:
         data: bytes,
         provenance: Provenance,
     ) -> Path:
-        path = self._artifact_path(kind, key)
-        self._write_atomic(path, data)
+        # Provenance first, artifact second. The artifact's existence is the
+        # commit point, so a crash between the two renames can only leave an
+        # orphan provenance file (harmless — the artifact is absent, so the node
+        # is a miss). The reverse order leaves an artifact with no provenance,
+        # hence an empty trace, which used to read as permanently fresh.
         self._write_atomic(
             self._provenance_path(kind, key),
             json.dumps(asdict(provenance), indent=2, sort_keys=True).encode(),
         )
+        path = self._artifact_path(kind, key)
+        self._write_atomic(path, data)
         self.stats["writes"] += 1
         return path
 
@@ -176,16 +181,21 @@ class ArtifactStore:
         cached = self.get(key.kind, digest)
         if cached is not None:
             prov = self.provenance(key.kind, digest)
-            trace = Trace(
-                entries=tuple(
-                    TraceEntry(ref=e["ref"], text_hash=e["text_hash"])
-                    for e in (prov.trace if prov else [])
+            if prov is None:
+                # Artifact without provenance: unverifiable, so not a hit. Only
+                # reachable if the store was tampered with, since `put` commits
+                # provenance first.
+                self.stats["invalidations"] += 1
+            else:
+                trace = Trace(
+                    entries=tuple(
+                        TraceEntry(ref=e["ref"], text_hash=e["text_hash"]) for e in prov.trace
+                    )
                 )
-            )
-            if trace.is_valid(current_hashes):
-                self.stats["hits"] += 1
-                return cached, True
-            self.stats["invalidations"] += 1
+                if trace.is_valid(current_hashes):
+                    self.stats["hits"] += 1
+                    return cached, True
+                self.stats["invalidations"] += 1
 
         self.stats["misses"] += 1
         data, trace, provenance = generate()

@@ -58,13 +58,57 @@ def _digest(parts: list[bytes]) -> str:
     return hashlib.sha256(_SEP.join(parts)).hexdigest()
 
 
-def text_hash(symbol) -> str:
-    """Hash of the token stream. **This is the staleness signal.**
+def _structure_repr(node: Node) -> bytes:
+    """Node types and field names, with comment subtrees omitted.
 
-    Insensitive to reformatting and comments; sensitive to every literal,
-    operator, identifier, annotation and decorator.
+    Distinct from `shape_hash`'s S-expression in exactly one way — comments are
+    dropped — and that difference is what lets structure participate in
+    `text_hash` without reintroducing the added-comment false positive.
+
+    This is needed because **indentation is not a leaf**. In Python, block
+    membership is encoded by indentation, so the token stream of::
+
+        if x:          if x:
+            return 1       return 1
+        return 2           return 2
+
+    is identical, while the behaviour is not: the first returns 2 when `x` is
+    falsy, the second returns None. Braced languages are safe by accident;
+    Python is not. A token-only hash therefore misses control-flow edits.
     """
-    return _digest(_leaf_tokens(symbol.hash_node, symbol.source))
+    parts: list[bytes] = []
+
+    def walk(n: Node) -> None:
+        if n.type in _IGNORED_LEAVES:
+            return
+        if n.child_count == 0:
+            # Leaf identity, not text — text is already covered by the tokens.
+            parts.append(n.type.encode())
+            return
+        parts.append(b"(" + n.type.encode())
+        for index, child in enumerate(n.children):
+            if child.type in _IGNORED_LEAVES:
+                continue
+            field = n.field_name_for_child(index)
+            if field:
+                parts.append(field.encode() + b":")
+            walk(child)
+        parts.append(b")")
+
+    walk(node)
+    return b" ".join(parts)
+
+
+def text_hash(symbol) -> str:
+    """Hash of the token stream **and** the comment-free block structure.
+
+    This is the staleness signal. Insensitive to reformatting and comments;
+    sensitive to every literal, operator, identifier, annotation, decorator —
+    and to statements moving across a block boundary, which a token-only hash
+    cannot see in an indentation-delimited language.
+    """
+    tokens = _leaf_tokens(symbol.hash_node, symbol.source)
+    return _digest([*tokens, b"\x1estructure", _structure_repr(symbol.hash_node)])
 
 
 def shape_hash(symbol) -> str:

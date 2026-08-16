@@ -121,11 +121,20 @@ class Trace:
     entries: tuple[TraceEntry, ...] = ()
 
     def is_valid(self, current: dict[str, str]) -> bool:
-        """True iff every consulted ref still has the hash it had when read.
+        """True iff the trace is non-empty and every entry still hashes equal.
 
-        A ref that has vanished entirely counts as invalid: the symbol may have
-        moved or been deleted, and either way the section must be re-examined.
+        A ref that has vanished counts as invalid: the symbol may have moved or
+        been deleted, and either way the section must be re-examined.
+
+        **An empty trace is invalid, not vacuously valid.** `all(())` is True,
+        which would make a node that recorded nothing permanently fresh no
+        matter how the repository changed — and that is reachable in practice,
+        because a crash between writing an artifact and writing its provenance
+        leaves exactly that state. A node that consulted nothing also cannot
+        support a `verified` claim, so regenerating it is right on both counts.
         """
+        if not self.entries:
+            return False
         return all(current.get(e.ref) == e.text_hash for e in self.entries)
 
     def stale_refs(self, current: dict[str, str]) -> list[str]:
