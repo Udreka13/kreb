@@ -4,7 +4,7 @@ Living document. Updated as work lands. The architecture it implements is
 [`idea/docs/architecture.md`](idea/docs/architecture.md); this file tracks *where we are*
 against it, not what it says.
 
-**Last updated:** 2026-08-16 · 239 tests green · `archaeology/` and `doc/` landed
+**Last updated:** 2026-08-16 · 283 tests green · `provider/` + `budget/` landed
 
 ---
 
@@ -37,8 +37,8 @@ until they are green.
 | 4 | `index/` map + import graph | **done** | model-free, guarded structurally |
 | 5 | `archaeology/` evidence chains | **done** | 50 tests; REST, not `gh` |
 | 6 | `doc/` schema + validators + Gate A | **done** | 49 tests; 3 audits stay manual |
-| 7 | `provider/` + `budget/` | **next** | first model calls |
-| 8 | `research/` outline + writers + stitch | pending | |
+| 7 | `provider/` + `budget/` | **done** | 44 tests; spend is measured, not guessed |
+| 8 | `research/` outline + writers + stitch | **next** | |
 | 9 | `viz/` + `render/html` | pending | |
 | 10 | `cli/` | pending | |
 | — | **Gate B** | pending | **stop-or-continue point** |
@@ -157,6 +157,24 @@ Recorded so they are not relitigated:
   catch because the symbol resolves.
 - **`research` role must be a cheap frontier model.** Sonnet-class pricing puts
   a depth-2 doc at ~$5, against a $2 target.
+- **Sync I/O with threads, not asyncio** (revises architecture.md §7, amended
+  there in the same commit). Everything else is synchronous subprocess work, the
+  load is dozens of concurrent requests rather than thousands, and an async port
+  would colour `research/`, `render/` and `cli/` for no gain at this scale.
+- **`budget` layers *below* `provider`.** A ledger holding `Usage` objects
+  inverts the dependency and `MeteredProvider` then closes a cycle — it failed
+  as an `ImportError` the moment `provider/` was written. Charges carry
+  primitives; the ledger never interprets a role.
+- **Cost is measured, never guessed.** OpenRouter returns `usage.cost` per
+  generation with no request flag needed (verified against their docs
+  2026-08-16; the old `usage: {include: true}` is deprecated). A fallback
+  estimate is allowed but is flagged `cost_is_estimated`, and the estimated
+  share of a run is reportable.
+- **No default spend cap.** Every ceiling is optional. The engine does not
+  truncate research to hit a number nobody chose.
+- **A ceiling cannot be exact.** A call's cost is unknown until it returns, so
+  `max_per_run` means "start no new call once passed"; overshoot is bounded by
+  one call, and that bound is what the test asserts.
 
 ## Environment notes
 

@@ -319,12 +319,15 @@ kreb/
 **The dependency rule is layered, not a whitelist.** v0.1's "render/* may import doc/ and provider/" said nothing about ordering *within* render, where real edges exist. Declare:
 
 ```
-store < repo < index < archaeology < research < doc < viz
+config < store < repo < index < archaeology < budget < provider
+      < research < doc < viz
       < render/beats < {render/narration, render/storyboard}
       < {render/audio, render/html} < render/video < cli
 ```
 
 Enforce with `import-linter` layered contracts in CI — a config file that catches ordering violations a cycle check passes.
+
+**`budget` sits below `provider`, and the ordering is not arbitrary.** The obvious arrangement — a ledger that records `Usage` objects — puts `budget` above `provider`, and then `MeteredProvider` (which needs both) closes a cycle. It surfaced immediately as an `ImportError` when `provider/` was built. Accounting knows nothing about transports: a `Charge` carries primitives, roles are plain strings, and the ledger never interprets either. That keeps the metering seam in `provider/`, where the spend happens.
 
 **The claim that survives:** deleting `render/video/` leaves a working product. True once diagrams move to `viz/`. This is the answer to "will the renderers destabilize the core," and it holds.
 
@@ -359,7 +362,11 @@ Every doc carries, and every renderer surfaces:
 
 ### Concurrency, decided once
 
-`asyncio` for network (provider, `gh`); `ProcessPoolExecutor` for tree-sitter parsing (CPU- and GIL-bound); SQLite in WAL mode, single writer.
+**Revised 2026-08-16, when `provider/` was built.** The original decision was `asyncio` for network work. That is now **synchronous I/O with a `ThreadPoolExecutor`**, and the revision is recorded here rather than left as a silent drift between the document and the code.
+
+Why: every other subsystem is synchronous subprocess work — `git`, tree-sitter, `d2`, `ffmpeg`, `piper` — and the concurrency this pipeline needs is dozens of simultaneous requests, not thousands, which threads cover completely. An async provider port would make the codebase two-coloured and force `research/`, `render/` and `cli/` to follow it for no measurable gain at this scale. The port stays a `Protocol`, so an async implementation behind a thread wrapper remains available if the shape of the load changes.
+
+`ProcessPoolExecutor` for tree-sitter parsing (CPU- and GIL-bound); SQLite in WAL mode, single writer.
 
 Hazards: parallel `git` subprocesses contend on `.git/index.lock` — use `--no-optional-locks` and read-only plumbing only; parallel section writers must share one `gh` rate-limit budget or they burst through 5,000/h; two `kreb` runs in one repo need a lockfile in `.kreb/`.
 
