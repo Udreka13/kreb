@@ -247,6 +247,54 @@ def test_in_memory_ledger_reports_that_it_is_not_persistent():
     assert Ledger().persistent is False
 
 
+def test_a_validator_that_raises_still_charges_the_generation():
+    """Found in review. The completion exists and the provider has billed for
+    it; recording the charge only on paths where validation returned normally
+    turns a validator bug into free inference."""
+    ledger = Ledger()
+    provider = MeteredProvider(inner=FakeProvider(cost=5.0), ledger=ledger)
+
+    def exploding(text):
+        raise ValueError("validator exploded")
+
+    with pytest.raises(ValueError):
+        provider.complete_validated(_request(), exploding)
+
+    assert ledger.total() == pytest.approx(5.0)
+    assert ledger.rows[0].failed is True
+
+
+def test_two_ledgers_on_one_file_see_each_others_spend(tmp_path):
+    """Found in review. Research and render are metered separately but share a
+    file; without a resync each held its construction-time snapshot, so a $10
+    daily ceiling let two phases spend $8 apiece and neither stopped."""
+    path = tmp_path / "spend.jsonl"
+    research = Ledger(path)
+    render = Ledger(path)
+
+    research.charge(Charge(phase=RESEARCH, unit="s1", role="research", model="m", cost=8.0))
+    render.charge(Charge(phase=RENDER, unit="r1", role="mechanical", model="m", cost=8.0))
+
+    assert research.total() == pytest.approx(16.0)
+    assert render.total() == pytest.approx(16.0)
+
+    budget = Budget(max_per_day=10.0)
+    assert budget.should_stop(research) is True
+    assert budget.should_stop(render) is True
+
+
+def test_rows_are_not_double_counted_after_a_resync(tmp_path):
+    path = tmp_path / "spend.jsonl"
+    a = Ledger(path)
+    a.charge(Charge(phase=RESEARCH, unit="x", role="research", model="m", cost=1.0))
+    a.total()
+    a.total()
+    a.charge(Charge(phase=RESEARCH, unit="y", role="research", model="m", cost=1.0))
+    assert a.total() == pytest.approx(2.0)
+    assert len(a.rows) == 2
+    assert Ledger(path).total() == pytest.approx(2.0)
+
+
 # -- ceilings --------------------------------------------------------------
 
 
@@ -332,6 +380,34 @@ def test_daily_ceiling_says_when_it_cannot_see_earlier_runs():
     decision = Budget(max_per_day=1.0).decide(ledger)
     assert decision.stop is True
     assert "in-memory" in decision.reason
+
+
+def test_phase_ceilings_are_enforced_even_without_a_phase_argument():
+    """Found in review. Scoped to the phase asked about, a caller that omitted
+    the argument skipped phase ceilings entirely — configured, reported as
+    configured, never enforced."""
+    ledger = Ledger()
+    ledger.charge(Charge(phase=RENDER, unit="r", role="narrate", model="m", cost=5.0))
+    budget = Budget(max_per_phase={RENDER: 1.0})
+
+    assert budget.should_stop(ledger, phase=RENDER) is True
+    assert budget.should_stop(ledger) is True  # was False before the fix
+
+
+def test_a_day_only_budget_still_warns():
+    """Found in review. `warn_at` watched only the run ceiling, so a budget
+    configured with just a daily cap reached it with no warning at all."""
+    ledger = Ledger()
+    ledger.charge(Charge(phase=RESEARCH, unit="a", role="research", model="m", cost=0.9))
+    decision = Budget(max_per_day=1.0, warn_at=0.5).decide(ledger)
+    assert decision.warn is True
+    assert decision.stop is False
+    assert "daily" in decision.reason
+
+
+def test_ceilings_reports_everything_configured():
+    budget = Budget(max_per_run=5.0, max_per_day=20.0, max_per_phase={RENDER: 1.0})
+    assert budget.ceilings == {"run": 5.0, "day": 20.0, RENDER: 1.0}
 
 
 def test_warning_fires_before_the_ceiling():

@@ -92,19 +92,31 @@ class MeteredProvider:
         for attempt in range(1, max_attempts + 1):
             self.budget.guard(self.ledger, phase=self.phase)
             completion = self.inner.complete(request)
-            failures = list(validate(completion.text))
 
-            self.ledger.charge(
-                Charge.from_usage(
-                    phase=self.phase,
-                    unit=request.unit,
-                    role=request.role,
-                    model=completion.model,
-                    usage=completion.usage,
-                    attempt=attempt,
-                    failed=bool(failures),
+            # From here the generation exists and the provider has billed for
+            # it, so the charge must survive anything `validate` does —
+            # including raising. Recording it only on the paths where
+            # validation returned normally means a validator bug shows up as
+            # free inference, which is the exact under-count this class exists
+            # to prevent.
+            failures: list[str] = []
+            try:
+                failures = list(validate(completion.text))
+            except BaseException:
+                failures = ["the validator raised while checking this generation"]
+                raise
+            finally:
+                self.ledger.charge(
+                    Charge.from_usage(
+                        phase=self.phase,
+                        unit=request.unit,
+                        role=request.role,
+                        model=completion.model,
+                        usage=completion.usage,
+                        attempt=attempt,
+                        failed=bool(failures),
+                    )
                 )
-            )
 
             if not failures:
                 return completion, reasons

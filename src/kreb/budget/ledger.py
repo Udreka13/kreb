@@ -106,19 +106,54 @@ class Ledger:
     def __init__(self, path: Path | str | None = None) -> None:
         self.path = Path(path) if path else None
         self.rows: list[Charge] = []
+        self._offset = 0
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.rows.extend(_read_rows(self.path))
+            self._sync()
 
     @property
     def persistent(self) -> bool:
         return self.path is not None
 
+    def _sync(self) -> None:
+        """Read any rows appended to the file since this ledger last looked.
+
+        Research and render phases are metered through separate providers that
+        share one file. Without this, each holds a snapshot from its own
+        construction and never sees the other's spend, so a `max_per_day`
+        ceiling of 10 lets two phases spend 8 apiece and neither one stops —
+        the file is correct while both in-memory views under-count. Reading
+        only the appended tail keeps that cheap even on a long ledger.
+        """
+        if self.path is None or not self.path.exists():
+            return
+        with open(self.path, "rb") as handle:
+            handle.seek(self._offset)
+            chunk = handle.read()
+        if not chunk:
+            return
+        # Stop at the last complete line; a partial tail is left for next time,
+        # when the writer will have finished it.
+        cut = chunk.rfind(b"\n")
+        if cut == -1:
+            return
+        self._offset += cut + 1
+        for line in chunk[: cut + 1].decode("utf-8", "replace").splitlines():
+            row = _parse_row(line)
+            if row is not None:
+                self.rows.append(row)
+
     def charge(self, row: Charge) -> Charge:
-        """Record a charge, durably if this ledger has a path."""
-        self.rows.append(row)
+        """Record a charge, durably if this ledger has a path.
+
+        Syncs first so the row lands after anything another ledger appended
+        while this one was idle.
+        """
         if self.path is not None:
+            self._sync()
             _append_row(self.path, row)
+            self._offset += len(_encode(row))
+        self.rows.append(row)
         return row
 
     # -- totals ------------------------------------------------------------
@@ -168,6 +203,9 @@ class Ledger:
         return sum(r.cost for r in self.rows if r.cost_is_estimated) / total
 
     def _select(self, *, phase: Phase | None = None, since: datetime | None = None):
+        # Every total goes through here, so this is the one place that has to
+        # pick up another process's or another ledger's appends.
+        self._sync()
         for row in self.rows:
             if phase is not None and row.phase != phase:
                 continue
@@ -184,38 +222,39 @@ def _parse_at(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _encode(row: Charge) -> bytes:
+    return (json.dumps(asdict(row), sort_keys=True) + "\n").encode("utf-8")
+
+
 def _append_row(path: Path, row: Charge) -> None:
     """Append one row and flush it to disk.
 
     `fsync` on every row looks excessive until a run is killed by a budget stop
     or an OOM and the last few charges are still in the page cache. Losing the
     tail of the ledger is losing exactly the spend that mattered.
+
+    Opened in append mode per row, so two ledgers writing the same file
+    interleave whole lines rather than overwriting each other.
     """
-    line = json.dumps(asdict(row), sort_keys=True) + "\n"
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(line)
+    with open(path, "ab") as handle:
+        handle.write(_encode(row))
         handle.flush()
         os.fsync(handle.fileno())
 
 
-def _read_rows(path: Path) -> list[Charge]:
-    """Load prior rows, skipping any truncated final line.
+def _parse_row(line: str) -> Charge | None:
+    """Parse one row, returning None for anything unreadable.
 
     A partial write from a hard kill must not make the ledger unreadable — that
     would turn a crash into a silent reset of the daily total.
     """
-    if not path.exists():
-        return []
-    rows: list[Charge] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rows.append(Charge(**json.loads(line)))
-        except (json.JSONDecodeError, TypeError):
-            continue
-    return rows
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        return Charge(**json.loads(line))
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def day_window(now: datetime | None = None) -> tuple[datetime, datetime]:
