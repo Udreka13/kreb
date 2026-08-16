@@ -66,6 +66,21 @@ class ForgeStatus:
         return f"forge: {'authenticated' if self.authenticated else 'anonymous (60 req/h)'}"
 
 
+def _is_rate_limit(exc: urllib.error.HTTPError) -> bool:
+    """Whether a 403 is a rate limit rather than a permission denial."""
+    headers = getattr(exc, "headers", None) or {}
+    if str(headers.get("x-ratelimit-remaining", "")).strip() == "0":
+        return True
+    if headers.get("retry-after"):  # secondary / abuse rate limit
+        return True
+    body = ""
+    try:
+        body = exc.read().decode("utf-8", "replace").lower()
+    except Exception:
+        pass
+    return "rate limit" in body
+
+
 def parse_remote(url: str) -> tuple[str, str] | None:
     """Extract (owner, repo) from an SSH or HTTPS GitHub remote."""
     cleaned = url.strip().removesuffix(".git")
@@ -125,9 +140,23 @@ class GitHubForge:
             with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            if exc.code in (403, 429):
+            # 403 is overloaded: GitHub returns it for rate limits *and* for
+            # permission denials. Reporting a permission problem as "rate
+            # limited" sends the user off to wait an hour for a wall that will
+            # still be there, so the headers decide which it is.
+            if exc.code == 429 or (exc.code == 403 and _is_rate_limit(exc)):
                 self.status.rate_limited = True
                 self.status.reason = "rate limit exceeded"
+            elif exc.code == 403:
+                self.status.available = False
+                self.status.reason = (
+                    "access denied"
+                    if self.token
+                    else "access denied; set GITHUB_TOKEN for private repositories"
+                )
+            elif exc.code == 401:
+                self.status.available = False
+                self.status.reason = "token rejected"
             elif exc.code == 404:
                 return None
             else:

@@ -89,6 +89,7 @@ class SymbolHistory:
     ref: str
     introduced: Evidence | None = None
     modifications: list[Evidence] = field(default_factory=list)
+    reverts: list[Evidence] = field(default_factory=list)
     issue_numbers: list[int] = field(default_factory=list)
     truncated: bool = False
     note: str = ""
@@ -97,6 +98,7 @@ class SymbolHistory:
     def commits(self) -> list[Commit]:
         out = [self.introduced.commit] if self.introduced else []
         out.extend(m.commit for m in self.modifications)
+        out.extend(r.commit for r in self.reverts)
         return out
 
 
@@ -203,6 +205,10 @@ class Pickaxe:
 
     commit: Commit | None
     saturated: bool = False
+    # Every commit that changed the needle's occurrence count, newest first.
+    # Intersecting this with the file's reverts is what makes a revert
+    # attributable to *this* symbol rather than merely to the same file.
+    touching: list[Commit] = field(default_factory=list)
 
 
 def find_introducing_commit(
@@ -244,7 +250,11 @@ def find_introducing_commit(
     commits = [c for c in records if c is not None]
     if not commits:
         return Pickaxe(commit=None)
-    return Pickaxe(commit=commits[-1], saturated=len(commits) > max_count)
+    return Pickaxe(
+        commit=commits[-1],
+        saturated=len(commits) > max_count,
+        touching=commits,
+    )
 
 
 def find_reverts(repo: Repository, path: str, *, max_count: int = 200) -> list[Commit]:
@@ -272,6 +282,7 @@ def symbol_history(
     *,
     timeout: float = DEFAULT_TIMEOUT,
     max_modifications: int = 5,
+    revert_cache: dict[str, list[Commit]] | None = None,
 ) -> SymbolHistory:
     """Build the evidence chain for one symbol.
 
@@ -359,9 +370,46 @@ def symbol_history(
                 )
             )
 
+    # A reverted attempt is among the highest-value rationale signals there is:
+    # it records something tried and rejected, which no amount of reading the
+    # current code recovers. But `find_reverts` is scoped to the *file*, and a
+    # revert elsewhere in a 900-line module says nothing about this symbol.
+    # Intersecting with the pickaxe's commit set is what earns the attribution.
+    if found.touching:
+        try:
+            file_reverts = _cached_reverts(repo, path, revert_cache)
+        except (GitError, TimeoutError):
+            file_reverts = []
+        touching_shas = {c.sha for c in found.touching}
+        for commit in file_reverts:
+            if commit.sha in touching_shas:
+                history.reverts.append(
+                    Evidence(
+                        kind="reverted",
+                        commit=commit,
+                        confidence="derived",
+                        method="revert commit touching this symbol's content",
+                    )
+                )
+
     issues: set[int] = set()
     for commit in history.commits:
         issues.update(commit.referenced_issues())
     history.issue_numbers = sorted(issues)
 
     return history
+
+
+def _cached_reverts(
+    repo: Repository, path: str, cache: dict[str, list[Commit]] | None
+) -> list[Commit]:
+    """Reverts are a per-file property; a per-symbol lookup would re-scan.
+
+    A module with forty symbols would otherwise run forty identical
+    `--grep=^Revert` walks over the same path.
+    """
+    if cache is None:
+        return find_reverts(repo, path)
+    if path not in cache:
+        cache[path] = find_reverts(repo, path)
+    return cache[path]

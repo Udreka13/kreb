@@ -4,7 +4,7 @@ Living document. Updated as work lands. The architecture it implements is
 [`idea/docs/architecture.md`](idea/docs/architecture.md); this file tracks *where we are*
 against it, not what it says.
 
-**Last updated:** 2026-08-16 · 141 tests green · pushed through `92b1da2`
+**Last updated:** 2026-08-16 · 185 tests green · `archaeology/` landed
 
 ---
 
@@ -35,8 +35,8 @@ until they are green.
 | 2 | `store/` artifact DAG | **done** | two node classes + 4 detectors |
 | 3 | `repo/` pinned-SHA access | **done** | secrets, shallow, dirty, vendored |
 | 4 | `index/` map + import graph | **done** | model-free, guarded structurally |
-| 5 | `archaeology/` evidence chains | **next** | ⚠ `gh` not installed here |
-| 6 | `doc/` schema + validators + Gate A | pending | |
+| 5 | `archaeology/` evidence chains | **done** | 44 tests; REST, not `gh` |
+| 6 | `doc/` schema + validators + Gate A | **next** | |
 | 7 | `provider/` + `budget/` | pending | first model calls |
 | 8 | `research/` outline + writers + stitch | pending | |
 | 9 | `viz/` + `render/html` | pending | |
@@ -82,6 +82,32 @@ Two more, contained rather than proven: validation laundering (positive
 requirements only, retry-attempt instrumentation) and video redundancy
 (structural validator + lexical overlap measure).
 
+### Round 2 (self + advisor, on `archaeology/`)
+
+The module's whole purpose is to not confuse last-touch with introduction, so
+every defect here was a variant of that same confusion sneaking back in:
+
+1. **A saturated pickaxe could be reported as `verified`.** `--max-count`
+   truncates from the *recent* end, so a search that hits its limit cannot see
+   the introduction at all — its oldest result is merely the oldest one looked
+   at. Worse, blame would often corroborate it, since that commit really did
+   touch the lines. Fixed by asking for one extra record to detect saturation,
+   and capping confidence at `derived` when it happens: blame agreeing about a
+   commit is not independent evidence about *earlier* commits.
+2. **Reverts were file-scoped.** `find_reverts` works on a path, so attaching
+   its results to a symbol would claim a decision was reconsidered for a
+   function it never touched. Fixed by intersecting with the pickaxe's commit
+   set, and cached per file so a 40-symbol module does not re-walk 40 times.
+3. **403 is overloaded by GitHub** — rate limit *and* permission denial. Telling
+   someone to wait an hour for a wall that will still be there is a confidently
+   wrong instruction, so the rate-limit headers now decide which it is.
+
+Checked and *not* reproduced: `git log -S <needle>` with a leading-dash needle.
+git's parse-options consumes the option's argument unconditionally, so the
+separate form is safe. Kept, with a regression test.
+
+All three fixes are mutation-verified: reintroducing each bug fails a test.
+
 ---
 
 ## Decisions already settled
@@ -106,7 +132,11 @@ Recorded so they are not relitigated:
 ## Environment notes
 
 - Python 3.14.6; `tree-sitter` 0.26.0 + `tree-sitter-language-pack` 1.14.3 verified working.
-- **`gh` is not installed.** Archaeology must use REST/GraphQL directly or degrade.
+- **`gh` is not installed.** Archaeology uses the REST API over stdlib `urllib`
+  instead — no dependency, and `ForgeStatus` reports what it could not reach.
+  Unauthenticated is 60 req/h, which is a hard wall for any real run; set
+  `GITHUB_TOKEN` for 5000. Batching commit→PR lookups via GraphQL
+  `associatedPullRequests` is the known next step if that becomes binding.
 - Push is over SSH as `Udreka13`.
 
 ## Open questions

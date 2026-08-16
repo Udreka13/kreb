@@ -11,6 +11,8 @@ failure this module exists to prevent, so it is the failure that gets a test.
 from __future__ import annotations
 
 import subprocess
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -249,12 +251,91 @@ def test_longest_distinctive_line_wins():
     assert pickaxe_line(lines) == DECISION_LINE
 
 
+def test_leading_dash_needle_is_not_parsed_as_an_option(history_repo):
+    """`git log -S` must receive a dash-prefixed needle as a value, not a flag.
+
+    A continuation line stripped of its indentation can easily start with `-`.
+    If git parsed it as an option the call would raise and the symbol would
+    silently degrade to a blame-only answer on files where the pickaxe works.
+    """
+    root = history_repo.root
+    (root / "calc.py").write_text(
+        "def total(base, discount):\n"
+        "    return (base\n"
+        "            - discount * base_multiplier_value)\n"
+    )
+    _commit(root, "Add discount arithmetic")
+    fresh = Repository(root)
+
+    found = find_introducing_commit(
+        fresh, "calc.py", "- discount * base_multiplier_value)", max_count=40
+    )
+    assert found.commit is not None
+    assert found.commit.subject == "Add discount arithmetic"
+
+
 # -- reverts ---------------------------------------------------------------
 
 
 def test_reverts_are_found(history_repo):
     reverts = find_reverts(history_repo, "retry.py")
     assert [c.subject for c in reverts] == ['Revert "Bump the ceiling to 60s"']
+
+
+def test_reverts_are_attributed_to_the_symbol_that_changed(history_repo):
+    """A file-scoped revert must not be attached to every symbol in the file.
+
+    The revert here touched `BACKOFF_CEILING_SECONDS`, not `next_delay`'s body.
+    Attaching it to `next_delay` would be a plausible-sounding, well-cited claim
+    about a decision that was never made about that function.
+    """
+    source, start, end = _next_delay_range(history_repo)
+    history = symbol_history(history_repo, "retry.py#next_delay", "retry.py", start, end, source)
+    assert history.reverts == []
+
+
+def test_a_revert_touching_the_symbol_is_reported(history_repo):
+    source = history_repo.read("retry.py")
+    symbol = next(
+        s for s in extract_symbols(source, "python") if s.name == "BACKOFF_CEILING_SECONDS"
+    )
+    history = symbol_history(
+        history_repo,
+        "retry.py#BACKOFF_CEILING_SECONDS",
+        "retry.py",
+        symbol.start_line,
+        symbol.end_line,
+        source,
+    )
+    assert [e.commit.subject for e in history.reverts] == ['Revert "Bump the ceiling to 60s"']
+    assert history.reverts[0].kind == "reverted"
+
+
+def test_revert_lookup_is_cached_per_file(history_repo, monkeypatch):
+    import kreb.archaeology.history as history_module
+
+    calls = []
+    real = history_module.find_reverts
+
+    def counted(repo, path, **kwargs):
+        calls.append(path)
+        return real(repo, path, **kwargs)
+
+    monkeypatch.setattr(history_module, "find_reverts", counted)
+
+    source = history_repo.read("retry.py")
+    cache: dict = {}
+    for symbol in extract_symbols(source, "python"):
+        symbol_history(
+            history_repo,
+            f"retry.py#{symbol.name}",
+            "retry.py",
+            symbol.start_line,
+            symbol.end_line,
+            source,
+            revert_cache=cache,
+        )
+    assert len(calls) == 1
 
 
 # -- degradation -----------------------------------------------------------
@@ -332,6 +413,59 @@ def test_no_forge_still_produces_evidence_and_says_so():
 def test_rate_limited_status_is_visible_in_the_manifest():
     status = ForgeStatus(available=True, rate_limited=True)
     assert "incomplete" in status.describe()
+
+
+def _http_error(code, headers=None, body=b""):
+    import io
+
+    return urllib.error.HTTPError(
+        "https://api.github.com/x", code, "err", headers or {}, io.BytesIO(body)
+    )
+
+
+def test_rate_limited_403_is_distinguished_from_access_denied(monkeypatch):
+    """GitHub overloads 403. Telling a user to wait an hour for a permission
+    wall is a confidently wrong instruction, so the headers decide."""
+    forge = GitHubForge("o", "r", token=None)
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(_http_error(403, {"x-ratelimit-remaining": "0"})),
+    )
+    assert forge._get("/x") is None
+    assert forge.status.rate_limited is True
+
+    denied = GitHubForge("o", "r", token=None)
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(_http_error(403, {"x-ratelimit-remaining": "4999"})),
+    )
+    assert denied._get("/x") is None
+    assert denied.status.rate_limited is False
+    assert "access denied" in denied.status.reason
+    assert "GITHUB_TOKEN" in denied.status.reason
+
+
+def test_secondary_rate_limit_is_detected_by_retry_after(monkeypatch):
+    forge = GitHubForge("o", "r", token=None)
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(_http_error(403, {"retry-after": "60"})),
+    )
+    forge._get("/x")
+    assert forge.status.rate_limited is True
+
+
+def test_404_does_not_mark_the_forge_broken(monkeypatch):
+    forge = GitHubForge("o", "r", token=None)
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(_http_error(404))
+    )
+    assert forge._get("/x") is None
+    assert forge.status.available is True
+    assert forge.status.rate_limited is False
 
 
 def test_rate_limit_short_circuits_further_requests(monkeypatch):
