@@ -1,0 +1,52 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="kreb: a one-eyed crab, painted in ochre and charcoal">
+  <title>kreb</title>
+
+  <defs>
+    <filter id="daub" x="-25%" y="-25%" width="150%" height="150%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="3" seed="11" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="2.5" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <!-- claw: fat palm, V-notch bitten out, two pointed fingers. Points along -x. -->
+    <path id="claw" d="M0 -11
+                       C -14 -20 -34 -20 -46 -13
+                       L -64 -21 L -45 -6 L -66 -2 L -43 4
+                       C -29 10 -14 12 0 11 Z"/>
+  </defs>
+
+  <g filter="url(#daub)" stroke="#241C15" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- legs -->
+    <g stroke-width="9" fill="none">
+      <path d="M62 132 L38 150"/>
+      <path d="M78 137 L62 163"/>
+      <path d="M92 139 L88 171"/>
+      <path d="M138 132 L162 150"/>
+      <path d="M122 137 L138 163"/>
+      <path d="M108 139 L112 171"/>
+    </g>
+
+    <!-- arms -->
+    <g stroke-width="10" fill="none">
+      <path d="M54 98 L44 84"/>
+      <path d="M146 98 L156 84"/>
+    </g>
+
+    <!-- claws -->
+    <g fill="#C4622B" stroke-width="5.5">
+      <use href="#claw" transform="translate(46 82) rotate(35) scale(0.78)"/>
+      <use href="#claw" transform="translate(154 82) rotate(-35) scale(-0.78 0.78)"/>
+    </g>
+
+    <!-- carapace -->
+    <path d="M42 106 C41 86 62 76 100 75 C138 76 159 87 158 107
+             C157 124 133 136 100 136 C67 136 43 123 42 106 Z"
+          fill="#C4622B" stroke-width="6"/>
+    <path d="M56 124 C72 133 87 136 100 136 C119 136 138 130 148 119"
+          stroke="#8E3419" stroke-width="7" fill="none"/>
+
+    <!-- the one eye, off to the side on a curved stalk -->
+    <path d="M109 78 Q 114 65 119 53" stroke-width="8" fill="none"/>
+    <circle cx="122" cy="43" r="13" fill="#E4D5B7" stroke-width="5.5"/>
+    <circle cx="123" cy="44" r="5.5" fill="#241C15" stroke="none"/>
+  </g>
+</svg>

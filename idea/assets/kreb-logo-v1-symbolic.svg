@@ -1,0 +1,49 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="kreb: a one-eyed crab holding a club, painted in ochre and charcoal">
+  <title>kreb</title>
+
+  <defs>
+    <!-- rough pigment edge: a light displacement so strokes read as daubed, not vector-perfect -->
+    <filter id="daub" x="-20%" y="-20%" width="140%" height="140%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="3" seed="7" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="3.2" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#daub)" fill="none" stroke="#241C15" stroke-width="5.5"
+     stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- club: shaft and knob, gripped by the raised claw -->
+    <path d="M20 78 L54 28" stroke="#8E3419" stroke-width="11"/>
+    <path d="M58 24 c8 -3 13 3 11 10 c-2 7 -10 9 -15 4 c-4 -4 -2 -12 4 -14 z"
+          fill="#8E3419" stroke="#241C15" stroke-width="4.5"/>
+
+    <!-- carapace -->
+    <path d="M47 101 C45 79 63 64 100 63 C137 64 156 80 154 102
+             C152 121 131 134 100 134 C69 133 49 120 47 101 Z"
+          fill="#C4622B"/>
+    <!-- second pigment pass: shadow along the underside -->
+    <path d="M60 122 C74 131 88 134 100 134 C118 134 136 128 147 117"
+          stroke="#8E3419" stroke-width="7" fill="none"/>
+
+    <!-- raised claw, gripping the shaft -->
+    <path d="M56 97 L46 74 L40 60" stroke-width="7"/>
+    <path d="M31 58 c-6 -6 -3 -14 5 -14 c6 0 10 5 9 11" fill="#C4622B" stroke-width="4.5"/>
+    <path d="M45 47 c6 -5 13 -2 14 6 c1 6 -4 11 -10 10" fill="#C4622B" stroke-width="4.5"/>
+
+    <!-- open claw -->
+    <path d="M148 106 L166 114" stroke-width="7"/>
+    <path d="M167 105 c9 -2 15 4 13 11 c-2 6 -9 8 -14 4" fill="#C4622B" stroke-width="4.5"/>
+    <path d="M170 124 c9 2 14 -4 12 -11" fill="none" stroke-width="4.5"/>
+
+    <!-- legs -->
+    <path d="M64 128 L52 148" stroke-width="6"/>
+    <path d="M82 133 L76 156" stroke-width="6"/>
+    <path d="M100 134 L100 158" stroke-width="6"/>
+    <path d="M118 133 L126 155" stroke-width="6"/>
+    <path d="M136 127 L149 146" stroke-width="6"/>
+
+    <!-- the eye: the one bright thing on the wall -->
+    <circle cx="100" cy="97" r="21" fill="#E4D5B7" stroke="#241C15" stroke-width="5"/>
+    <circle cx="102" cy="99" r="8.5" fill="#241C15" stroke="none"/>
+  </g>
+</svg>
