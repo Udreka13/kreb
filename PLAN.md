@@ -4,7 +4,7 @@ Living document. Updated as work lands. The architecture it implements is
 [`idea/docs/architecture.md`](idea/docs/architecture.md); this file tracks *where we are*
 against it, not what it says.
 
-**Last updated:** 2026-08-16
+**Last updated:** 2026-08-16 · 141 tests green · pushed through `92b1da2`
 
 ---
 
@@ -31,11 +31,11 @@ until they are green.
 
 | # | Module | State | Notes |
 |---|---|---|---|
-| 1 | `index/` symbols + hashes | **done** | 46 tests; mutation-verified |
-| 2 | `store/` artifact DAG | in progress | two node classes + 4 detectors |
-| 3 | `repo/` pinned-SHA access | pending | |
-| 4 | `index/` map + import graph | pending | must stay model-free |
-| 5 | `archaeology/` evidence chains | pending | ⚠ `gh` not installed here |
+| 1 | `index/` symbols + hashes | **done** | 52 tests; mutation-verified |
+| 2 | `store/` artifact DAG | **done** | two node classes + 4 detectors |
+| 3 | `repo/` pinned-SHA access | **done** | secrets, shallow, dirty, vendored |
+| 4 | `index/` map + import graph | **done** | model-free, guarded structurally |
+| 5 | `archaeology/` evidence chains | **next** | ⚠ `gh` not installed here |
 | 6 | `doc/` schema + validators + Gate A | pending | |
 | 7 | `provider/` + `budget/` | pending | first model calls |
 | 8 | `research/` outline + writers + stitch | pending | |
@@ -53,9 +53,30 @@ enough on its own — the detector is the deliverable.
 
 | Bug | Fix | Detector | State |
 |---|---|---|---|
-| Staleness blind to semantic change | three hashes; `text_hash` drives staleness | 46-case corpus, PY + TS | ✅ green, mutation-verified |
-| Every commit invalidates everything | two node classes; identity vs validity | idempotence / reproducibility / isolation / precision | in progress |
-| `map` costs more than the whole budget | map is model-free; summaries lazily memoized | assert 0 model calls during map | pending |
+| Staleness blind to semantic change | three hashes; `text_hash` = tokens + comment-free structure | 52-case corpus, PY + TS | ✅ green, mutation-verified |
+| Every commit invalidates everything | two node classes; identity vs validity | idempotence / reproducibility / isolation / precision | ✅ green, mutation-verified |
+| `map` costs more than the whole budget | map is model-free; summaries lazily memoized | transitive import-graph guard + exploding provider | ✅ green |
+
+### Review round 1 (hermes, on `index/` + `store/`)
+
+Three real defects, all reproduced independently before fixing:
+
+1. **`text_hash` was blind to control-flow changes.** Indentation is not a leaf,
+   so moving a statement in or out of a block left the token stream identical.
+   A stale section was re-served as fresh after a behaviour change — the same
+   class of silent miss as the original bug, one level down. Fixed by folding a
+   *comment-free* structure representation into `text_hash`.
+2. **An empty verifying trace was vacuously valid** (`all(())` is `True`), and
+   that state was reachable because `put()` wrote the artifact before its
+   provenance. Fixed both ends: empty traces are invalid, and provenance is now
+   the first write so the artifact's existence implies it.
+3. **Named constants were not indexed**, so a section citing `MAX_RETRIES` would
+   fail as a *fabricated anchor* — a hard Gate A failure — purely from an
+   incomplete index.
+
+Known limitations accepted: `text_hash` over-fires on redundant parentheses,
+kwarg reordering and trailing commas (cost, not correctness); TS overload
+signatures are not indexed separately.
 
 Two more, contained rather than proven: validation laundering (positive
 requirements only, retry-attempt instrumentation) and video redundancy
