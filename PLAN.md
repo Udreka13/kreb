@@ -4,7 +4,7 @@ Living document. Updated as work lands. The architecture it implements is
 [`idea/docs/architecture.md`](idea/docs/architecture.md); this file tracks *where we are*
 against it, not what it says.
 
-**Last updated:** 2026-08-16 · 185 tests green · `archaeology/` landed
+**Last updated:** 2026-08-16 · 239 tests green · `archaeology/` and `doc/` landed
 
 ---
 
@@ -35,9 +35,9 @@ until they are green.
 | 2 | `store/` artifact DAG | **done** | two node classes + 4 detectors |
 | 3 | `repo/` pinned-SHA access | **done** | secrets, shallow, dirty, vendored |
 | 4 | `index/` map + import graph | **done** | model-free, guarded structurally |
-| 5 | `archaeology/` evidence chains | **done** | 44 tests; REST, not `gh` |
-| 6 | `doc/` schema + validators + Gate A | **next** | |
-| 7 | `provider/` + `budget/` | pending | first model calls |
+| 5 | `archaeology/` evidence chains | **done** | 50 tests; REST, not `gh` |
+| 6 | `doc/` schema + validators + Gate A | **done** | 49 tests; 3 audits stay manual |
+| 7 | `provider/` + `budget/` | **next** | first model calls |
 | 8 | `research/` outline + writers + stitch | pending | |
 | 9 | `viz/` + `render/html` | pending | |
 | 10 | `cli/` | pending | |
@@ -107,6 +107,35 @@ git's parse-options consumes the option's argument unconditionally, so the
 separate form is safe. Kept, with a regression test.
 
 All three fixes are mutation-verified: reintroducing each bug fails a test.
+
+### Round 3 (hermes, on `archaeology/`)
+
+The reviewer found one defect; chasing it surfaced a larger one it had not named.
+
+1. **Pointer dereferences were read as comments.** The `\*` alternative in
+   `_UNDISTINCTIVE` matched any line starting with `*`, which is a C block-comment
+   continuation *and* a dereference. A deref-heavy body then had no needle and
+   fell through to the blame-only branch. Operators now separate them.
+2. **A later rename became the introduction.** The pickaxe finds when a line's
+   *current* text first appeared, so any renamed line dates itself to the rename
+   — and blame corroborates, so the wrong answer arrived at `verified`. Picking
+   the single longest line made it a coin flip. Now up to three needles are
+   searched and the oldest kept, ordered by `merge-base --is-ancestor` rather
+   than by author date (which ties in the same second, is carried across by
+   cherry-picks, and is forgeable).
+
+Deliberately *not* done: downgrading confidence when needles disagree.
+Disagreement fires equally on the correct case (symbol extended after
+introduction) and the incorrect one (every line since rewritten), so it is not
+evidence — and spending confidence on it would make `verified` unreachable for
+any symbol that was ever edited.
+
+**Operational lesson: `hermes --yolo` runs git in the repo it is pointed at.**
+This reviewer built its test scenarios as commits on `main` rather than in
+`/tmp` as instructed, and its `git add -A` swept in-progress work into them.
+Nothing was lost or pushed, but future review passes get a scratch worktree, or
+a committed tree and a check of `git log` afterwards. Flag order also matters:
+`hermes --yolo -z "<prompt>"` — `-z` last, or argparse eats the next flag.
 
 ---
 
