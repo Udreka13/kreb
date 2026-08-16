@@ -165,6 +165,53 @@ def test_refactor_appears_as_modification_not_introduction(history_repo):
     assert history.introduced.commit.sha not in {m.commit.sha for m in history.modifications}
 
 
+def test_a_later_rename_does_not_become_the_introduction(history_repo):
+    """The second way to confuse last-touch with introduction.
+
+    The pickaxe finds when a line's *exact current text* first appeared, so any
+    line touched by a later rename dates itself to that rename — and blame
+    agrees it touched the range, so the wrong answer arrives at `verified`.
+    Here the longest line is renamed in commit 2 while a shorter neighbour
+    survives untouched from commit 1. Searching only the longest line reports
+    the rename; searching several and keeping the oldest reports the truth.
+    """
+    root = history_repo.root
+    (root / "calc.c").write_text(
+        "int measure(int *addr, int *err) {\n"
+        "    *err = format_the_diagnostic_output(*addr, offset_total);\n"
+        "    *count = *count + offset_total;\n"
+        "}\n"
+    )
+    _commit(root, "Add measurement with offset accounting")
+
+    (root / "calc.c").write_text(
+        "int measure(int *source, int *out) {\n"
+        "    *out = format_the_diagnostic_output(*source, offset_total);\n"
+        "    *count = *count + offset_total;\n"
+        "}\n"
+    )
+    _commit(root, "Rename measure parameters")
+    fresh = Repository(root)
+
+    history = symbol_history(
+        fresh, "calc.c#measure", "calc.c", 1, 4, fresh.read("calc.c")
+    )
+    assert history.introduced.commit.subject == "Add measurement with offset accounting"
+
+
+def test_oldest_needle_is_chosen_by_ancestry_not_date(history_repo):
+    """Every commit in this fixture shares one author date by construction.
+
+    Date ordering would tie and fall back to list order, which is needle length
+    — the very heuristic being corrected. Ancestry is what defines "earlier".
+    """
+    dates = {c.date for c in find_reverts(history_repo, "retry.py")}
+    source, start, end = _next_delay_range(history_repo)
+    history = symbol_history(history_repo, "retry.py#next_delay", "retry.py", start, end, source)
+    assert len(dates) <= 1  # the fixture really does pin dates
+    assert history.introduced.commit.subject.startswith("Add retry policy")
+
+
 # -- saturation ------------------------------------------------------------
 
 
@@ -225,6 +272,8 @@ def test_saturation_downgrades_confidence(history_repo, monkeypatch):
         "    return",
         "    # a comment that is quite long indeed",
         "    // another long trailing comment here",
+        "     * Returns the number of retries attempted",
+        "    /* an opening block comment marker here */",
         "from kreb.repo.access import Repository",
         "import collections.abc",
     ],
@@ -239,6 +288,12 @@ def test_boilerplate_is_never_pickaxed(line):
         "    return self._resolve(policy, fallback_delay)",
         "export function nextDelay(attempt: number): number {",
         "    scaled = base_delay * attempt",
+        # C and Go pointer dereferences lead with `*` like a block-comment
+        # continuation does. Rejecting them as comments leaves deref-heavy
+        # bodies with no needle, dropping them to a blame-only answer — the
+        # last-touch commit, which is the one answer this module must not give.
+        "    *err = fmt_only(*addr, offset_total);",
+        "    *count = *count + offset_total;",
     ],
 )
 def test_distinctive_lines_survive(line):

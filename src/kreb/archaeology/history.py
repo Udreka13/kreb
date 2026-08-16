@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 import subprocess
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from kreb.repo.access import _GIT_ENV, _GIT_FLAGS, GitError, Repository
 
@@ -38,7 +39,14 @@ _UNDISTINCTIVE = re.compile(
     r"^\s*(?:"
     r"[(){}\[\];,]*"  # punctuation only, including the empty line
     r"|(?:pass|return|break|continue|else|try|end|None|null)\s*:?\s*"
-    r"|(?:#|//|\*|/\*).*"  # comment lines
+    r"|(?:#|//|/\*).*"  # comment lines
+    # A leading `*` is a C block-comment continuation (` * Returns the count`)
+    # — but it is also a pointer dereference (`*err = fmt(*addr);`), which is
+    # real, distinctive content. Excluding both loses the needle on C and Go
+    # bodies made of deref lines, dropping those symbols to a blame-only answer:
+    # the last-touch commit, which is the one wrong answer this module must
+    # never give. Operators tell them apart.
+    r"|\*[^=;(){}\[\]]*"
     r"|(?:import|from|package)\s.*"  # import lines: shared across many files
     r")\s*$"
 )
@@ -175,21 +183,36 @@ def blame_lines(
     return counts
 
 
-def pickaxe_line(source_lines: list[str]) -> str | None:
-    """Choose a distinctive line to search history for.
+def pickaxe_candidates(source_lines: list[str], limit: int = 3) -> list[str]:
+    """Distinctive lines to search history for, longest first.
 
-    Prefers the longest line that is not boilerplate. A generic line
-    (`return`, `}`, an import) would match thousands of commits and turn a
-    bounded lookup into a full-history scan with a useless answer.
+    Several, not one, and that is the point. The pickaxe finds when a line's
+    *exact current text* first appeared, so any line touched by a later rename
+    reports that rename as the introduction — confidently, since blame agrees it
+    touched the range. A neighbouring line untouched since the original commit
+    gives the right answer. Searching only the longest line is a coin flip
+    between them.
+
+    A generic line (`return`, `}`, an import) is excluded because it would match
+    thousands of commits, turning a bounded lookup into a full-history scan with
+    a useless answer at the end of it.
     """
-    candidates = [
-        line.strip()
-        for line in source_lines
-        if len(line.strip()) >= 12 and not _UNDISTINCTIVE.match(line)
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=len)
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for line in source_lines:
+        stripped = line.strip()
+        if len(stripped) < 12 or _UNDISTINCTIVE.match(line) or stripped in seen:
+            continue
+        seen.add(stripped)
+        candidates.append(stripped)
+    candidates.sort(key=len, reverse=True)
+    return candidates[:limit]
+
+
+def pickaxe_line(source_lines: list[str]) -> str | None:
+    """The single most distinctive line, or None. See `pickaxe_candidates`."""
+    candidates = pickaxe_candidates(source_lines, limit=1)
+    return candidates[0] if candidates else None
 
 
 @dataclass
@@ -209,6 +232,57 @@ class Pickaxe:
     # Intersecting this with the file's reverts is what makes a revert
     # attributable to *this* symbol rather than merely to the same file.
     touching: list[Commit] = field(default_factory=list)
+    # Whether every needle that produced an answer produced the *same* answer.
+    # Disagreement is informative: it means at least one line was rewritten
+    # after the symbol was introduced, so the result is a bound, not a sighting.
+    agreed: bool = True
+
+
+def _is_ancestor(repo: Repository, older: str, newer: str) -> bool:
+    """Whether `older` is an ancestor of `newer`, by exit code."""
+    proc = subprocess.run(
+        ["git", *_GIT_FLAGS, "merge-base", "--is-ancestor", older, newer],
+        cwd=repo.root,
+        env=_GIT_ENV,
+        capture_output=True,
+        check=False,
+        timeout=DEFAULT_TIMEOUT,
+    )
+    return proc.returncode == 0
+
+
+def _oldest(repo: Repository, results: list[Pickaxe]) -> Pickaxe:
+    """Combine per-needle searches into the oldest defensible answer.
+
+    Ordered by ancestry rather than by date. Author dates are the obvious
+    choice and the wrong one: they are attacker- and rebase-controlled, they tie
+    when several commits land in the same second, and a cherry-pick carries the
+    original date onto a much later commit. `merge-base --is-ancestor` asks the
+    graph, which is the thing that actually defines "earlier".
+    """
+    answered = [r for r in results if r.commit is not None]
+    if not answered:
+        return Pickaxe(commit=None, saturated=any(r.saturated for r in results))
+
+    best = answered[0]
+    for candidate in answered[1:]:
+        if candidate.commit.sha == best.commit.sha:
+            continue
+        if _is_ancestor(repo, candidate.commit.sha, best.commit.sha):
+            best = candidate
+    touching: list[Commit] = []
+    seen: set[str] = set()
+    for result in answered:
+        for commit in result.touching:
+            if commit.sha not in seen:
+                seen.add(commit.sha)
+                touching.append(commit)
+    return Pickaxe(
+        commit=best.commit,
+        saturated=any(r.saturated for r in results),
+        touching=touching,
+        agreed=len({r.commit.sha for r in answered}) == 1,
+    )
 
 
 def find_introducing_commit(
@@ -282,6 +356,7 @@ def symbol_history(
     *,
     timeout: float = DEFAULT_TIMEOUT,
     max_modifications: int = 5,
+    max_needles: int = 3,
     revert_cache: dict[str, list[Commit]] | None = None,
 ) -> SymbolHistory:
     """Build the evidence chain for one symbol.
@@ -308,14 +383,21 @@ def symbol_history(
         history.truncated = True
         return history
 
-    needle = pickaxe_line(lines)
-    found = Pickaxe(commit=None)
-    if needle:
+    # Search several needles and keep the oldest answer. A line touched by a
+    # later rename dates itself to the rename; a neighbouring line untouched
+    # since the original commit dates itself correctly. The introduction of the
+    # symbol is bounded above by the oldest of them, never by whichever line
+    # happened to be longest.
+    results: list[Pickaxe] = []
+    for needle in pickaxe_candidates(lines, limit=max_needles):
         try:
-            found = find_introducing_commit(repo, path, needle, timeout=timeout)
+            results.append(find_introducing_commit(repo, path, needle, timeout=timeout))
         except (GitError, TimeoutError) as exc:
             history.note = f"pickaxe unavailable: {exc}"
             history.truncated = True
+            break
+
+    found = _oldest(repo, results)
 
     if found.commit is not None:
         # Corroboration decides confidence. If blame also points at this commit,
@@ -332,6 +414,19 @@ def symbol_history(
             history.truncated = True
             history.note = (
                 history.note or "pickaxe hit its commit limit; earlier history not searched"
+            )
+        elif not found.agreed:
+            # Recorded as context, deliberately *not* as a confidence penalty.
+            # Disagreement cannot tell the two cases apart: a symbol introduced
+            # in C1 and extended in C5 disagrees (and the oldest answer is
+            # right), and a symbol whose every line was rewritten since C1 also
+            # disagrees (and the oldest answer is too recent). A signal that
+            # fires equally on the correct and incorrect case is not evidence,
+            # and spending confidence on it would only make `verified`
+            # unreachable for any symbol that was ever edited.
+            history.note = history.note or (
+                "the symbol was modified after it was introduced; "
+                "the oldest surviving line dates it"
             )
         history.introduced = Evidence(
             kind="introduced",
