@@ -446,13 +446,36 @@ def test_referenced_issues_dedupes_and_sorts():
         ("https://github.com/Udreka13/kreb.git", ("Udreka13", "kreb")),
         ("https://github.com/Udreka13/kreb", ("Udreka13", "kreb")),
         ("ssh://git@github.com/org/some-repo.git", ("org", "some-repo")),
+        ("https://user@github.com/o/r.git", ("o", "r")),
+        ("git://github.com/o/r.git", ("o", "r")),
+        ("https://github.com/o/r/", ("o", "r")),
+        # Repository names may contain dots; only a trailing .git is stripped.
+        ("https://github.com/o/my.tool.git", ("o", "my.tool")),
+        ("https://github.com/o/docs.io", ("o", "docs.io")),
+        ("https://github.com/o/r.wiki.git", ("o", "r.wiki")),
     ],
 )
 def test_remote_parsing(url, expected):
     assert parse_remote(url) == expected
 
 
-@pytest.mark.parametrize("url", ["git@gitlab.com:x/y.git", "/local/path", ""])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "git@gitlab.com:x/y.git",
+        "/local/path",
+        "",
+        "https://github.enterprise.com/o/r",
+        "https://github.com.evil.com/o/r",
+        # Found in review: the host must BE github.com, not merely end with it.
+        # Otherwise every lookup queries api.github.com about a repository that
+        # lives somewhere else, and attaches the answer as evidence.
+        "notgithub.com/o/r",
+        "https://notgithub.com/o/r",
+        "git@notgithub.com:o/r.git",
+        "https://mygithub.com/o/r",
+    ],
+)
 def test_non_github_remotes_are_declined(url):
     assert parse_remote(url) is None
 

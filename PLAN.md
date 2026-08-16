@@ -4,7 +4,7 @@ Living document. Updated as work lands. The architecture it implements is
 [`idea/docs/architecture.md`](idea/docs/architecture.md); this file tracks *where we are*
 against it, not what it says.
 
-**Last updated:** 2026-08-16 · 283 tests green · `provider/` + `budget/` landed
+**Last updated:** 2026-08-16 · 369 tests green · **kreb runs end to end**
 
 ---
 
@@ -38,10 +38,10 @@ until they are green.
 | 5 | `archaeology/` evidence chains | **done** | 50 tests; REST, not `gh` |
 | 6 | `doc/` schema + validators + Gate A | **done** | 49 tests; 3 audits stay manual |
 | 7 | `provider/` + `budget/` | **done** | 44 tests; spend is measured, not guessed |
-| 8 | `research/` outline + writers + stitch | **next** | |
-| 9 | `viz/` + `render/html` | pending | |
-| 10 | `cli/` | pending | |
-| — | **Gate B** | pending | **stop-or-continue point** |
+| 8 | `research/` outline + writers + stitch | **done** | section is the DAG unit |
+| 9 | `viz/` + `render/html` + `render/markdown` | **done** | zero-JS HTML; d2 degrades |
+| 10 | `cli/` | **done** | argparse; runs keyless except `doc` |
+| — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
 | 11 | `render/beats` + audio | pending | |
 | 12 | `render/storyboard` + video | pending | |
 | 13 | `mcp/` | pending | deferred deliberately |
@@ -136,6 +136,56 @@ This reviewer built its test scenarios as commits on `main` rather than in
 Nothing was lost or pushed, but future review passes get a scratch worktree, or
 a committed tree and a check of `git log` afterwards. Flag order also matters:
 `hermes --yolo -z "<prompt>"` — `-z` last, or argparse eats the next flag.
+
+### Round 4 (hermes, on `budget/`, `provider/`, `doc/`, `forge.py`)
+
+Two reviewers on an isolated copy of the repo. Seven real defects, every one
+reproduced by running code before it was fixed, every fix mutation-verified.
+
+Spend accounting — the number a ceiling is enforced against:
+
+1. **A validator that *raised* lost the charge.** The completion existed and had
+   been billed, but the ledger write sat after the validate call, so a validator
+   bug read as free inference. Charging now happens in a `finally`.
+2. **Two `Ledger`s on one file each under-counted the other.** Research and
+   render are metered separately but share a path; each held its
+   construction-time snapshot, so a $10 daily ceiling let two phases spend $8
+   apiece and neither stopped. Totals now resync the appended tail.
+3. **Phase ceilings were unenforced without a `phase` argument** — configured,
+   reported as configured, never applied.
+4. **`warn_at` watched only the run ceiling**, so a day-only budget hit its cap
+   with no warning.
+
+Validation — the rules that decide whether a document may claim to be factual:
+
+5. **A symbol named only inside a fenced block was invisible**, and `MAX_RETRIES`
+   was invisible everywhere: `_CODEY` matched snake_case and PascalCase but not
+   SCREAMING_SNAKE. A section demonstrating repository behaviour in a fence
+   therefore named zero identifiers and passed Gate A carrying no evidence. This
+   was a genuine leak, not a false alarm.
+6. **Diagram anchors were validated but did not count.** `_check_anchors` always
+   read them while three sibling rules read only `section.anchors`, so a section
+   whose sole citation lived on its diagram was failed for having no anchor.
+7. **`notgithub.com` parsed as GitHub.** Neither remote regex had a left-hand
+   host delimiter, so any host merely *ending* in `github.com` was accepted —
+   and every lookup would then ask api.github.com about a repository living
+   somewhere else and attach the answer as evidence.
+
+Also closed from the same pass: Stripe, npm, PyPI and Azure connection-string
+formats had no secret pattern at all; bare `token` and `secret` were missing
+from the assigned-credential keyword list (the same value was caught under
+`password` and missed under `token`); and the OpenAI `sk-` rule allowed hyphens
+in the tail, so an ordinary service slug like `sk-metrics-collector-prod-01`
+read as a credential — a detector that cries wolf is one that gets switched off.
+
+Checked and found clean: float accumulation against ceilings (14 cost shapes, no
+drift), timezone handling of `Charge.at` (naive, offset, bare date and garbage
+all normalise correctly), and CRLF private-key blocks.
+
+Deliberately *not* fixed: a symbol name split across a line break
+(`Retry\nPolicy`). Joining adjacent capitalised words across newlines would
+over-fire on ordinary prose, and the cost of the miss is lower than the cost of
+a noisy rule.
 
 ---
 

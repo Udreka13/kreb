@@ -27,8 +27,25 @@ from dataclasses import dataclass, field
 API_ROOT = "https://api.github.com"
 _TIMEOUT = 15.0
 
-_REMOTE_PATTERNS = (
-    re.compile(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+)(?:\.git)?/?$"),
+# The host must be *exactly* github.com, not merely end with it. Without a
+# left-hand delimiter, `notgithub.com/o/r` parses as a GitHub repository — which
+# is the host-confusion this function exists to refuse, since everything
+# downstream then queries api.github.com about a repository on another host.
+_REMOTE = re.compile(
+    r"""
+    ^(?:
+        (?:ssh|git|https?)://(?:[^@/]+@)?   # scheme, optional userinfo
+      | (?:[^@/\s]+@)                        # scp-style user@
+      |                                      # or a bare host
+    )
+    github\.com
+    [:/]
+    (?P<owner>[^/\s]+)
+    /
+    (?P<repo>[^/\s]+?)
+    /?$
+    """,
+    re.VERBOSE | re.IGNORECASE,
 )
 
 
@@ -82,16 +99,27 @@ def _is_rate_limit(exc: urllib.error.HTTPError) -> bool:
 
 
 def parse_remote(url: str) -> tuple[str, str] | None:
-    """Extract (owner, repo) from an SSH or HTTPS GitHub remote."""
-    cleaned = url.strip().removesuffix(".git")
-    for pattern in _REMOTE_PATTERNS:
-        match = pattern.search(cleaned + ("" if cleaned.endswith("/") else "/"))
-        if match:
-            return match.group("owner"), match.group("repo")
-    match = re.search(r"github\.com[:/]([^/]+)/([^/]+?)/?$", cleaned)
-    if match:
-        return match.group(1), match.group(2)
-    return None
+    """Extract (owner, repo) from a GitHub remote, or None for anything else.
+
+    Declining is the important half. `github.enterprise.com`, `github.com.evil.com`
+    and `notgithub.com` are all *not* github.com, and treating any of them as
+    GitHub means asking api.github.com about a repository that lives elsewhere —
+    and attaching whatever comes back to this document as evidence.
+
+    Repository names may contain dots (`my.tool`, `docs.io`), so only a trailing
+    `.git` is stripped, never every extension.
+    """
+    cleaned = url.strip()
+    if not cleaned:
+        return None
+    match = _REMOTE.match(cleaned)
+    if not match:
+        return None
+    repo = match.group("repo").removesuffix(".git")
+    owner = match.group("owner")
+    if not repo or not owner:
+        return None
+    return owner, repo
 
 
 class GitHubForge:

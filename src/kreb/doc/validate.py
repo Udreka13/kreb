@@ -28,9 +28,19 @@ from kreb.index.repo_index import RepoIndex
 
 Severity = Literal["fail", "warn"]
 
+# Fenced blocks first, so their contents are scanned rather than skipped: a
+# claim whose only mention of a repository symbol sits inside a ``` fence was
+# invisible to this rule, and the section passed Gate A carrying no evidence.
+_FENCED = re.compile(r"```[a-zA-Z0-9_+-]*\n(.*?)```", re.DOTALL)
 # Backticked spans, plus bare tokens that look like code by convention.
 _BACKTICKED = re.compile(r"`([^`\n]{1,120})`")
-_CODEY = re.compile(r"\b(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)+|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+)\b")
+_CODEY = re.compile(
+    r"\b(?:"
+    r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+"  # snake_case
+    r"|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+"  # PascalCase
+    r"|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+"  # SCREAMING_SNAKE_CASE constants
+    r")\b"
+)
 
 
 @dataclass(frozen=True)
@@ -107,12 +117,31 @@ def identifiers_in(text: str) -> set[str]:
             expanded.add(token)
             expanded.add(token.rpartition(".")[2])
     expanded.update(m.group(0) for m in _CODEY.finditer(text))
+    # A fenced example is still a claim about this repository — arguably a
+    # stronger one, since it shows the code rather than describing it.
+    for block in _FENCED.finditer(text):
+        body = block.group(1)
+        expanded.update(m.group(0) for m in _CODEY.finditer(body))
+        for token in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", body):
+            expanded.add(token)
     return {t for t in expanded if t and not t.isspace()}
 
 
 def indexed_identifiers(text: str, index: RepoIndex) -> set[str]:
     """The subset of `identifiers_in` that names a real symbol in this repo."""
     return {token for token in identifiers_in(text) if index.by_name.get(token)}
+
+
+def all_anchors(section: Section) -> tuple[Anchor, ...]:
+    """Every anchor a section carries, including on its diagram.
+
+    `_check_anchors` always counted diagram anchors while three sibling rules
+    read only `section.anchors`, so a section whose sole citation lived on its
+    diagram was failed for having no anchor — while that same anchor was being
+    resolved and validated one rule over. The inconsistency failed safe, but it
+    failed real sections, so the set is defined once here and shared.
+    """
+    return tuple(section.anchors) + tuple(section.diagram.anchors if section.diagram else ())
 
 
 def validate(doc: Document, index: RepoIndex) -> Report:
@@ -139,8 +168,7 @@ def _check_anchors(section: Section, index: RepoIndex, report: Report) -> None:
     they have different causes — a stale path versus an invented name — so
     collapsing them into "bad anchor" throws away the diagnosis.
     """
-    anchors = list(section.anchors) + list(section.diagram.anchors if section.diagram else [])
-    for anchor in anchors:
+    for anchor in all_anchors(section):
         report.anchor_total += 1
         status = index.anchor_status(anchor.ref)
         state, destination = anchor_staleness(anchor, index)
@@ -209,7 +237,7 @@ def _check_confidence(section: Section, report: Report) -> None:
     if section.confidence != "verified":
         return
     report.verified_sections += 1
-    if section.anchors:
+    if all_anchors(section):
         report.verified_with_anchor += 1
     else:
         report.add(
@@ -232,7 +260,7 @@ def _check_repo_claims(section: Section, index: RepoIndex, report: Report) -> No
     named = indexed_identifiers(section.body, index)
     if not named:
         return
-    if section.repo_evidence or section.anchors:
+    if section.repo_evidence or all_anchors(section):
         return
     sample = ", ".join(sorted(named)[:4])
     report.add(
@@ -254,14 +282,15 @@ def _check_background(section: Section, index: RepoIndex, report: Report) -> Non
     """
     if section.kind != "background":
         return
-    if section.anchors:
+    anchors = all_anchors(section)
+    if anchors:
         report.add(
             "background_cites_repo",
             "warn",
             section.id,
             "a background section carries repository anchors; it may be making "
             "claims about this repo under a label that says it is not",
-            section.anchors[0].ref,
+            anchors[0].ref,
         )
 
 

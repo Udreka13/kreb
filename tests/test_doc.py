@@ -353,6 +353,75 @@ def test_background_carrying_repo_anchors_warns_but_does_not_fail(index, caps):
     assert [f.rule for f in report.warnings] == ["background_cites_repo"]
 
 
+def test_a_symbol_named_only_inside_a_fence_still_needs_evidence(index, caps):
+    """Found in review — a real leak, not a false alarm.
+
+    `MAX_RETRIES` is neither backticked nor matched by the snake/Pascal
+    conventions, so a section demonstrating repository behaviour in a fenced
+    block named zero identifiers, `_check_repo_claims` returned early, and the
+    section passed Gate A with no evidence at all.
+    """
+    body = "We hardcode the ceiling:\n\n```\nMAX_RETRIES = 5\n```\n\nNobody overrides it."
+    doc = _doc(caps, Section(id="s1", title="a", kind="structure", body=body))
+    result = gate_a(doc, index)
+    assert not result.passed
+    assert "external_only_repo_claim" in [f.rule for f in validate(doc, index).failures]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "MAX_RETRIES governs the ceiling.",
+        "[MAX_RETRIES](docs#constants) governs the ceiling.",
+        "## MAX_RETRIES is the ceiling too",
+        "```python\nif attempt >= MAX_RETRIES:\n    return False\n```",
+    ],
+)
+def test_screaming_snake_constants_are_recognised(body, index):
+    from kreb.doc.validate import indexed_identifiers
+
+    assert "MAX_RETRIES" in indexed_identifiers(body, index)
+
+
+def test_a_diagram_anchor_satisfies_the_rules_that_read_anchors(index, caps):
+    """Found in review. `_check_anchors` validated diagram anchors while three
+    sibling rules ignored them, so a section whose only citation lived on its
+    diagram was failed for carrying no anchor."""
+    symbol = index.symbols["retry.py#RetryPolicy"]
+    doc = _doc(
+        caps,
+        Section(
+            id="s1",
+            title="Shape",
+            kind="structure",
+            body="`RetryPolicy` controls retries.",
+            confidence="verified",
+            diagram=DiagramSpec(
+                title="d",
+                d2_source="x -> y",
+                provenance="extracted",
+                anchors=(_anchor(index, symbol.ref),),
+            ),
+        ),
+    )
+    report = validate(doc, index)
+    assert report.ok, [str(f) for f in report.failures]
+
+
+def test_a_fabricated_diagram_anchor_is_still_caught(index, caps):
+    doc = _doc(
+        caps,
+        Section(
+            id="s1", title="a", kind="structure", body="text",
+            diagram=DiagramSpec(
+                title="d", d2_source="x -> y", provenance="extracted",
+                anchors=(Anchor(ref="retry.py#invented", text_hash="x"),),
+            ),
+        ),
+    )
+    assert "fabricated_anchor" in [f.rule for f in validate(doc, index).failures]
+
+
 @pytest.mark.parametrize(
     "body,expected",
     [
@@ -441,16 +510,35 @@ def test_asserted_diagram_without_anchors_is_fine(index, caps):
 # -- secrets ---------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "-----BEGIN RSA PRIVATE KEY-----",
-        "AKIA1234567890ABCDEF",
-        "ghp_" + "a1b2c3d4e5" * 4,
-        "sk-ant-api03-" + "x7y8z9" * 6,
-        'api_key = "a1b2c3d4e5f6g7h8i9j0"',
-    ],
-)
+# Every credential-shaped fixture is assembled at runtime rather than written as
+# a literal. These strings are synthetic, but a good detector cannot tell them
+# from real ones — that is the entire point — so GitHub's push protection
+# rejected the file when they appeared verbatim. Splitting the prefix keeps the
+# test exercising the same bytes while leaving nothing for a file scanner to
+# match. A test suite for a secret detector should not itself trip one.
+_BODY = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdef"
+_B64 = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWYxMjM0"
+
+CREDENTIALS = [
+    "-----BEGIN RSA PRIVATE" + " KEY-----",
+    "AKIA" + "1234567890ABCDEF",
+    "ghp" + "_" + "a1b2c3d4e5" * 4,
+    "sk-" + "ant-api03-" + "x7y8z9" * 6,
+    'api_key = "' + "a1b2c3d4e5f6g7h8i9j0" + '"',
+    # All found in review: formats that had no pattern at all.
+    "sk" + "_live_" + _BODY,
+    "pk" + "_live_" + _BODY,
+    "npm" + "_" + "AbCdEfGhIjKlMnOpQrStUvWxYz1234567890",
+    "pypi" + "-AgEIcHlRUFJfBCtgT7uk6EKRl0FUQxrl5T2z",
+    "DefaultEndpointsProtocol=https;AccountName=a;AccountKey=" + _BODY + "=;EndpointSuffix=x",
+    "Endpoint=sb://x.servicebus.windows.net/;SharedAccessKey=" + _BODY + "+=",
+    # The same value was caught under `password` and missed under these.
+    'token = "' + _B64 + '"',
+    "secret: \"" + _B64 + '"',
+]
+
+
+@pytest.mark.parametrize("text", CREDENTIALS)
 def test_credentials_are_detected(text):
     assert contains_secret(text)
 
@@ -467,6 +555,11 @@ def test_credentials_are_detected(text):
         # AWS's own documentation key. Real repos quote it constantly; firing on
         # it would mean firing on half the READMEs that mention S3.
         "AKIAIOSFODNN7EXAMPLE",
+        # Found in review: the OpenAI pattern allowed hyphens in the tail, so an
+        # ordinary service slug read as a credential. A detector that cries wolf
+        # gets switched off, and the real leaks go with it.
+        "SERVICE_NAME = 'sk-metrics-collector-prod-01'",
+        "queue = 'sk-ingest-worker-eu-west-1'",
     ],
 )
 def test_ordinary_code_is_not_flagged(text):

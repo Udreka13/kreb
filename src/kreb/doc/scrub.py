@@ -24,8 +24,22 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("private key block", re.compile(r"-----BEGIN[ A-Z]*PRIVATE KEY-----")),
     ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b")),
-    ("OpenAI-style key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b")),
-    ("Anthropic key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}\b")),
+    # The tail must be alphanumeric. The previous form allowed hyphens, which
+    # made it fire on ordinary slugs like `sk-metrics-collector-prod-01` — and a
+    # detector that cries wolf on service names is a detector someone switches
+    # off, taking the real leaks with it.
+    # `sk-ant-` keeps hyphens: real keys look like `sk-ant-api03-<long>`, and the
+    # prefix is specific enough that a service slug will not collide with it.
+    # The looseness only had to leave the bare `sk-` rule below.
+    ("Anthropic key", re.compile(r"\bsk-ant-[A-Za-z0-9][A-Za-z0-9-]{18,}\b")),
+    ("OpenAI-style key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9]{20,}\b")),
+    ("Stripe key", re.compile(r"\b[sprk]k_(?:live|test)_[A-Za-z0-9]{16,}\b")),
+    ("npm token", re.compile(r"\bnpm_[A-Za-z0-9]{30,}\b")),
+    ("PyPI token", re.compile(r"\bpypi-[A-Za-z0-9_-]{16,}\b")),
+    (
+        "Azure connection string",
+        re.compile(r"(?i)\b(?:AccountKey|SharedAccessKey)=[A-Za-z0-9+/=]{20,}"),
+    ),
     ("Slack token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}\b")),
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
     ("JSON Web Token", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+")),
@@ -33,8 +47,12 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "assigned credential literal",
         re.compile(
             r"""(?ix)
+            # Bare `token` and `secret` were missing, and they are the two most
+            # common names in a values.yaml or a .env — the same value was
+            # caught under `password` and missed under `token`.
             \b(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|
-                 client[_-]?secret|password|passwd)\b
+                 client[_-]?secret|password|passwd|token|secret|
+                 private[_-]?key|credentials?)\b
             \s*[:=]\s*
             (['"])          # a quoted literal, not a function call
             (?=[^'"]{16,})  # long enough to be a real credential
