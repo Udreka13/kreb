@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -335,29 +336,63 @@ def plan_sections(repo_map, index, *, question: str, depth: int) -> list:
     plausible-looking non-answer. Relevance leads and centrality breaks ties, so
     a question with no lexical hits still degrades to the central symbols rather
     than to nothing.
+
+    **The candidate pool is the whole repository, not a central prefix.** Ranking
+    relevance inside a pool that centrality already chose cannot surface anything
+    centrality missed, which makes the relevance weighting decorative on exactly
+    the repositories where it matters. In a layered codebase the most-imported
+    symbols are the domain entities, so "how does reranking work" scored the
+    top-80 pool and returned domain models — a plausible-looking non-answer
+    reached by a different route. Scoring every symbol is a few string
+    comparisons per symbol and removes the failure entirely.
     """
     from kreb.research.loop import PlannedSection
 
     question_terms = _terms(question)
-    pool = repo_map.central_symbols[:80] or []
+    pool = _plannable(repo_map.central_symbols or [])
     if not pool:
         return []
 
-    top_score = max((score for _ref, score in pool), default=1.0) or 1.0
+    # Both signals are normalised against the best value available in this
+    # repository, because they are otherwise on incomparable scales and the
+    # weights become decorative. Relevance is a fraction of the *question's*
+    # terms, so a long question mechanically depresses every symbol's score: on
+    # a real repository the best possible lexical match measured 0.33 against a
+    # centrality of 1.00, and 0.7 x 0.33 loses to 0.3 x 1.00. A perfect match
+    # could not outrank a merely-central symbol. Normalising both to their own
+    # maxima asks the same question of each — how good is this, relative to the
+    # best this repository offers — and makes the weights mean what they say.
+    top_central = max((score for _ref, score in pool), default=1.0) or 1.0
+    relevance = {ref: _relevance(question_terms, ref) for ref, _score in pool}
+    # `or 1.0` is what makes a question with no lexical hits degrade to pure
+    # centrality rather than divide by zero.
+    top_relevance = max(relevance.values(), default=0.0) or 1.0
+
     ranked = sorted(
         pool,
         key=lambda item: (
-            -(0.7 * _relevance(question_terms, item[0]) + 0.3 * (item[1] / top_score)),
+            -(
+                0.7 * (relevance[item[0]] / top_relevance)
+                + 0.3 * (item[1] / top_central)
+            ),
             item[0],
         ),
     )
 
     wanted = max(3, depth * 4)
-    plan = []
-    for position, (ref, _score) in enumerate(ranked[:wanted]):
+    plan: list = []
+    seen: set[str] = set()
+    for ref, _score in ranked:
+        if len(plan) >= wanted:
+            break
+        ref = _section_subject(ref, index)
+        if ref in seen:
+            continue
         symbol = index.resolve(ref)
         if symbol is None:
             continue
+        seen.add(ref)
+        position = len(plan)
         plan.append(
             PlannedSection(
                 id=f"s{position:02d}-{symbol.name.lower().replace('_', '-')[:40]}",
@@ -369,6 +404,50 @@ def plan_sections(repo_map, index, *, question: str, depth: int) -> list:
             )
         )
     return plan
+
+
+_TEST_PATH = re.compile(
+    r"(?:^|/)(?:tests?|spec|__tests__)/"
+    r"|(?:^|/)conftest\.py$"
+    r"|(?:^|/)test_[^/]*$"
+    r"|_test\.[a-z]+$"
+    r"|\.(?:test|spec)\.[jt]sx?$"
+)
+
+
+def _plannable(scored: list[tuple[str, float]]) -> list[tuple[str, float]]:
+    """Drop test symbols from section candidacy — but not from the index.
+
+    Test names restate a feature's vocabulary more densely than the feature
+    does: `test_recorded_session_feeds_campaign` matches a question about
+    recorded sessions feeding campaigns better than the transcriber that
+    actually does it. Once relevance is scaled to mean what it says, tests win,
+    and a section explaining a repository by its test names is a section about
+    the wrong artifact.
+
+    They stay in the index and remain citable as evidence — this decides only
+    what deserves a section of its own.
+    """
+    kept = [item for item in scored if not _TEST_PATH.search(item[0].partition("#")[0])]
+    # A repository that is all tests still gets a plan rather than nothing.
+    return kept or scored
+
+
+def _section_subject(ref: str, index) -> str:
+    """Promote an attribute or method to the thing that contains it.
+
+    Nearly half the symbols in a typical repository are class members, and a
+    section per member is padding by construction — five sections on
+    `RetrievedPassage.score`, `.page`, `.label` say together what one section on
+    `RetrievedPassage` says once. Promoting rather than dropping keeps the
+    signal when a *method* name matches the question and its class name does
+    not; the caller deduplicates, so several members collapse onto one subject.
+    """
+    path, _, qualname = ref.partition("#")
+    if "." not in qualname:
+        return ref
+    parent = f"{path}#{qualname.rpartition('.')[0]}"
+    return parent if parent in index.symbols else ref
 
 
 def _plan_from_map(repo_map, index, *, depth: int, question: str = "") -> list:

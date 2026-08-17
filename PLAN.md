@@ -230,6 +230,29 @@ Recorded so they are not relitigated:
   is why MCP needs no new instrumentation when it arrives.
 - **`auto` is quiet when stderr is not a terminal.** An unattended run should
   not fill a log with lines nobody reads; `--progress plain` forces them on.
+- **Ranking signals must be normalised against each other, not weighted.**
+  Relevance is a fraction of the *question's* terms, so it tops out low — the
+  best possible lexical match on a real repository measured **0.33** while
+  normalised centrality reaches **1.00**, and `0.7 x 0.33` loses to `0.3 x 1.00`.
+  A perfect match could not outrank a merely-central symbol. Both signals are
+  now scaled to their own corpus maximum. Re-tuning the weights cannot fix
+  incomparable scales.
+- **The candidate pool is the whole repository.** Ranking relevance inside a
+  pool centrality already chose cannot surface anything centrality missed. This
+  is why 5cd573e's fix was incomplete: it fixed the ranking, not the pool, and
+  the bug stayed invisible on kreb itself, where the top-80 pool was 16% of the
+  repo instead of 3%.
+- **Class members and test symbols are not planned as sections.** Nearly half
+  the symbols in a repository are members, and a section per member is padding;
+  members are promoted to their owner and deduplicated. Test names restate a
+  feature's vocabulary more densely than the feature does, so once relevance
+  means what it says, tests win — a section explaining a repository by its test
+  names is a section about the wrong artifact. Both stay citable as evidence.
+- **The planner is sensitive to question phrasing, by design and not by
+  accident.** It is model-free lexical ranking; a question built from vocabulary
+  that is generic *in that codebase* ("HTTP router") dilutes across every match,
+  while a rare term ("reranking") is diagnostic. Fixing this properly means IDF,
+  which is deferred: the dry-run is free, so a bad plan costs nothing to catch.
 - **Gate B is conducted on a repository the reader knows cold, never on kreb.**
   On kreb's own code every claim is novel to its author, so the ≥3 bar passes by
   construction, and nothing is cheaply checkable, so the zero-wrong bar cannot be

@@ -327,6 +327,82 @@ def test_the_plan_follows_the_question_not_just_centrality(project):
     assert "compute_backoff" in plan[0].refs[0]
 
 
+@pytest.fixture()
+def layered(project):
+    """A repository shaped like a real one, at the size where the bugs appear.
+
+    A layered codebase has a domain-model module that everything imports and
+    feature code that nothing imports, so centrality ranks the models top and
+    the answer bottom. Two details are load-bearing and not decoration:
+
+    *The model module holds more than 80 symbols.* The planner used to score
+    only the 80 most central, so on a small repository the answer was inside the
+    pool anyway and every ranking bug was invisible. This is the size at which
+    the pool starts excluding things.
+
+    *The question matches the target on one term out of five.* Relevance is a
+    fraction of the question's terms, so it is small in practice — the real
+    measurement was 0.17 against a centrality of 1.00. A fixture where the
+    target matches half the question hides the scale mismatch.
+    """
+    classes = "\n\n".join(
+        f"class Entity{n}:\n    name = ''\n    size = 0\n    label = ''" for n in range(30)
+    )
+    (project / "models.py").write_text(classes + "\n")
+    for i in range(6):
+        (project / f"consumer{i}.py").write_text(
+            f"from models import Entity0\n\n\ndef use{i}(e):\n    return e.name\n"
+        )
+    (project / "rerank.py").write_text(
+        "def rerank_passages(passages):\n    return sorted(passages)\n"
+    )
+    (project / "tests").mkdir()
+    (project / "tests" / "test_rerank.py").write_text(
+        "def test_the_reranker_solves_the_ordering_problem():\n    assert True\n"
+    )
+    _git(project, "add", "-A")
+    _git(project, "commit", "-q", "-m", "layered")
+    return project
+
+
+def _plan_for(project, question, depth=2):
+    from kreb.cli import plan_sections
+    from kreb.index.repo_map import build_map
+
+    index = build_index(Repository(project))
+    return plan_sections(build_map(index), index, question=question, depth=depth)
+
+
+def test_a_lexical_match_outranks_a_symbol_that_is_merely_central(layered):
+    """Relevance is a fraction of the *question's* terms, so it tops out low —
+    measured at 0.33 on a real repository — while normalised centrality reaches
+    1.00. Unless both are scaled to their own maxima the weights are decorative
+    and a perfect match loses to the most-imported symbol."""
+    plan = _plan_for(layered, "why does the reranker exist and what problem did it solve?")
+    assert plan[0].refs[0] == "rerank.py#rerank_passages", (
+        f"the question was answered by {plan[0].refs[0]}"
+    )
+
+
+def test_no_section_is_planned_for_a_class_member(layered):
+    """Nearly half the symbols in a repository are members. Five sections on
+    `Hub.name`, `.size`, `.label` say together what one on `Hub` says once."""
+    plan = _plan_for(layered, "what do the entity name label and size fields mean?")
+    dotted = [p.refs[0] for p in plan if "." in p.refs[0].partition("#")[2]]
+    assert not dotted, f"planned a section per member: {dotted}"
+    assert any(p.refs[0].startswith("models.py#Entity") for p in plan), (
+        "the member's owner should stand in for it"
+    )
+
+
+def test_test_files_are_not_planned_as_sections(layered):
+    """A test name restates a feature's vocabulary more densely than the feature
+    does, so amplifying lexical signal makes tests win."""
+    plan = _plan_for(layered, "why does the reranker exist and what problem did it solve?")
+    assert not [p for p in plan if "test" in p.refs[0].partition("#")[0]]
+    assert plan[0].refs[0] == "rerank.py#rerank_passages"
+
+
 def test_a_question_with_no_lexical_hits_still_plans_something(project):
     """Degrade to the central symbols rather than to nothing."""
     from kreb.cli import plan_sections
