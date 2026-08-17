@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from kreb.doc.schema import Anchor, Confidence, Document
 from kreb.doc.validate import Report, all_anchors, anchor_staleness, validate
 from kreb.index.repo_index import RepoIndex
+from kreb.prose import split_sentences
 from kreb.repo.access import Repository
 
 # The thresholds, as data rather than as prose, so they appear in every sheet
@@ -43,11 +44,6 @@ from kreb.repo.access import Repository
 NOVEL_TRUE_REQUIRED = 3
 WRONG_AT_VERIFIED_ALLOWED = 0
 
-# Sentence-ish. Splits after `.`, `?` or `!` followed by whitespace and a capital
-# or a backtick, which keeps `path/to/file.py` and `v2.13` intact. Inline code
-# spans are masked first so a period inside one never splits.
-_SENTENCE = re.compile(r"(?<=[.?!])\s+(?=[A-Z`])")
-_CODE_SPAN = re.compile(r"`[^`]*`")
 _BULLET = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", re.MULTILINE)
 
 
@@ -200,23 +196,10 @@ def split_claims(body: str) -> list[str]:
                 if item:
                     statements.append(item)
             continue
-        for sentence in _split_sentences(" ".join(lines)):
+        for sentence in split_sentences(" ".join(lines)):
             if sentence:
                 statements.append(sentence)
     return statements
-
-
-def _split_sentences(text: str) -> list[str]:
-    """Split on sentence ends outside inline code spans."""
-    # Mask code spans to a same-length run of `x`, so offsets stay valid and no
-    # period inside `os.path.join` can end a sentence.
-    masked = _CODE_SPAN.sub(lambda m: "x" * len(m.group()), text)
-    out, start = [], 0
-    for match in _SENTENCE.finditer(masked):
-        out.append(text[start : match.start()].strip())
-        start = match.end()
-    out.append(text[start:].strip())
-    return [s for s in out if s]
 
 
 def _view(anchor: Anchor, index: RepoIndex, repo: Repository | None) -> AnchorView:

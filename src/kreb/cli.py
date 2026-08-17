@@ -201,6 +201,142 @@ def cmd_gate_b(args) -> int:
     return 0
 
 
+def cmd_audio(args) -> int:
+    """Turn a document into spoken narration, and into audio if a voice exists.
+
+    Three artifacts, deliberately separable: `beats.json` (what gets said, in
+    what order), `narration.json` (the words), and the wav plus `timings.json`.
+    The first two cost model calls and are the part with judgement in them; the
+    last two cost nothing and are pure mechanism.
+
+    When no speech engine is available this still writes the beats, the
+    narration and an estimated timeline, and says what is missing — the same
+    partial-that-says-so contract the research loop uses when it hits a ceiling.
+    A missing voice must not cost you the writing you already paid for.
+    """
+    from kreb.budget.ledger import Ledger
+    from kreb.budget.policy import Budget
+    from kreb.config.secrets import MissingCredential, resolve_api_key
+    from kreb.progress import Progress, reporter_for
+    from kreb.provider.metered import MeteredProvider
+    from kreb.provider.openrouter import OpenRouterProvider
+    from kreb.render import beats as beats_mod
+    from kreb.render import narration as narration_mod
+    from kreb.render.audio import build_audio, timings_json
+    from kreb.tts.piper import PiperEngine
+    from kreb.tts.silence import SilenceEngine
+
+    doc = Document.read(args.document)
+    repo = _repo(args)
+    index = build_index(repo)
+
+    kreb_dir = Path(args.repo) / ".kreb"
+    out_dir = Path(args.out) if args.out else kreb_dir / "audio"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    engine = (
+        SilenceEngine()
+        if args.voice == "silence"
+        else PiperEngine(voice=Path(args.voice) if args.voice else None)
+    )
+
+    reporter = reporter_for("none" if args.quiet else args.progress, sys.stderr)
+    progress = Progress(reporter)
+
+    beats_path = out_dir / "beats.json"
+    narration_path = out_dir / "narration.json"
+
+    if beats_path.exists() and narration_path.exists() and not args.regen:
+        # Re-synthesizing is free; re-writing is not. Reusing the prose by
+        # default is what makes "try a different voice" a cheap experiment.
+        plan = beats_mod.from_json(beats_path.read_text(encoding="utf-8"))
+        narration = narration_mod.from_json(narration_path.read_text(encoding="utf-8"))
+        spent = 0.0
+    else:
+        try:
+            api_key = resolve_api_key()
+        except MissingCredential as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
+        ledger = Ledger(kreb_dir / "spend.jsonl")
+        provider = MeteredProvider(
+            inner=OpenRouterProvider(api_key=api_key, profile=args.profile),
+            ledger=ledger,
+            budget=Budget(max_per_run=args.max_cost, warn_at=0.8),
+            phase="render",
+        )
+
+        progress.emit("beats_started", "planning what to say", total=len(doc.sections))
+        planned = beats_mod.plan_beats(doc, index, provider, progress=progress)
+        if not planned.ok:
+            print("could not plan beats:", file=sys.stderr)
+            for reason in planned.rejections[-4:]:
+                print(f"  - {reason}", file=sys.stderr)
+            return 1
+        plan = planned.plan
+        beats_path.write_text(beats_mod.to_json(plan), encoding="utf-8")
+
+        progress.emit("narration_started", "writing the script", total=len(plan.beats))
+        written = narration_mod.write_narration(
+            plan, index, provider, document=doc, progress=progress
+        )
+        if not written.ok:
+            print("could not write narration:", file=sys.stderr)
+            for reason in written.rejections[-4:]:
+                print(f"  - {reason}", file=sys.stderr)
+            return 1
+        narration = written.narration
+        narration_path.write_text(narration_mod.to_json(narration), encoding="utf-8")
+        spent = planned.cost + written.cost
+
+    (out_dir / "script.txt").write_text(narration.script + "\n", encoding="utf-8")
+
+    result = build_audio(
+        narration,
+        engine,
+        out=out_dir / "narration.wav",
+        cache_dir=kreb_dir / "tts",
+        progress=progress,
+    )
+    (out_dir / "timings.json").write_text(timings_json(result), encoding="utf-8")
+
+    if args.json:
+        _emit(
+            {
+                "beats": str(beats_path.resolve()),
+                "narration": str(narration_path.resolve()),
+                "timings": str((out_dir / "timings.json").resolve()),
+                "audio": str(result.path.resolve()) if result.path else None,
+                "engine": result.engine,
+                "segments": len(narration.segments),
+                "seconds": round(result.seconds, 2),
+                "estimated": result.estimated,
+                "synthesized": result.synthesized,
+                "reused": result.reused,
+                "reason": result.reason,
+                "cost": round(spent, 6),
+            },
+            as_json=True,
+        )
+        # Same exit code as the human path. Returning 0 here because the JSON
+        # was emitted successfully would make `--json` the flag that hides
+        # failures from exactly the callers most likely to be scripting them.
+        return 0 if result.ok else 1
+
+    minutes, seconds = divmod(int(result.seconds), 60)
+    length = f"{minutes}:{seconds:02d}" + (" (estimated)" if result.estimated else "")
+    print(f"{len(narration.segments)} segments, {length}, ${spent:.4f}")
+    if result.reason:
+        print(f"no audio: {result.reason}", file=sys.stderr)
+    for failure in result.failures[:5]:
+        print(f"  {failure}", file=sys.stderr)
+    print((result.path or narration_path).resolve())
+    # Exit 1 when there is no audio: unlike Gate B, this command has a
+    # mechanical definition of success and a caller scripting it needs to know.
+    return 0 if result.ok else 1
+
+
 def cmd_doc(args) -> int:
     """Run research and write a document. This is the command that spends money."""
     from kreb.budget.ledger import Ledger
@@ -504,6 +640,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_gate_b.add_argument("--format", default="html", choices=["html", "md"])
     p_gate_b.add_argument("--out", default="")
     p_gate_b.set_defaults(func=cmd_gate_b)
+
+    p_audio = sub.add_parser("audio", help="narrate a document, and speak it if a voice exists")
+    p_audio.add_argument("document")
+    p_audio.add_argument(
+        "--voice",
+        default="silence",
+        help="path to a piper voice model, or `silence` for a timed placeholder track",
+    )
+    p_audio.add_argument("--profile", default="balanced", choices=["budget", "balanced", "max"])
+    p_audio.add_argument("--max-cost", type=float, default=None)
+    p_audio.add_argument("--out", default="", help="directory for the audio artifacts")
+    p_audio.add_argument(
+        "--regen", action="store_true", help="rewrite the beats and script instead of reusing"
+    )
+    p_audio.add_argument(
+        "--progress", default="auto", choices=["auto", "plain", "json", "none"]
+    )
+    p_audio.add_argument("--quiet", action="store_true", help="no progress output")
+    p_audio.set_defaults(func=cmd_audio)
 
     return parser
 

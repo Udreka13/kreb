@@ -44,8 +44,8 @@ until they are green.
 | 11 | `progress/` event stream | **done** | 22 tests; stderr only, MCP-shaped |
 | 12 | `doc/gate_b` + worksheet | **done** | 23 tests; builds the sheet, scores nothing |
 | — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
-| 13 | `render/beats` + audio | pending | |
-| 14 | `render/storyboard` + video | pending | |
+| 13 | `render/beats` + `render/narration` + `tts/` + audio | **done** | 34 tests; runs voiceless, says so |
+| 14 | `render/storyboard` + video | pending | consumes `beats` + `timings` |
 | 15 | `mcp/` | pending | deferred deliberately |
 
 ## The three fatal bugs and their detectors
@@ -267,6 +267,39 @@ Recorded so they are not relitigated:
 - **A ceiling cannot be exact.** A call's cost is unknown until it returns, so
   `max_per_run` means "start no new call once passed"; overshoot is bounded by
   one call, and that bound is what the test asserts.
+- **Beats come before prose, and both renderers descend from them.** v0.1 ran
+  `narration → storyboard` — write the script, then find pictures. That edge
+  points the wrong way and guarantees a narrator describing what the screen is
+  not showing. `beats` is the shared plan; audio and video share not one sentence.
+- **A beat's flags are derived, never authored.** `confidence` and `kind` are
+  copied off the source section; `hedge_required` and `prefix_required` are
+  *properties*, not fields, so no model and no caller can set them. Same
+  invariant as "the model never authors an `Anchor`", and for the same reason —
+  the hedge validator is only sound if what it checks against could not have
+  been written by the thing it is checking.
+- **The hedge rule is stated positively because only positive rules are
+  enforceable.** A `speculative` segment must *contain* a word from `HEDGES`.
+  "Must not sound overconfident" is the same intent, unenforceable, and a model
+  told to avoid sounding a way simply stops sounding that way.
+- **The background signpost is prepended, not requested.** Where hedging must
+  come from the model — you cannot mechanically insert "probably" and get
+  English — a signpost can just be prefixed, which makes it structural rather
+  than omittable. Same move as duration being a computed field.
+- **The TTS cache key includes the engine identity**, which for piper means the
+  binary version *and* a hash of the voice model file. Without it, upgrading
+  piper and editing one paragraph yields one audible timbre seam mid-document
+  that no artifact hash catches.
+- **`tts/` is a port, and `SilenceEngine` is not only a test double.** It emits
+  silence of the right duration, so concatenation, probing and the timings
+  artifact are buildable and checkable on a machine with no TTS at all — which
+  is most machines. Every timing it produces is flagged `estimated`, so a
+  word-count estimate can never be mistaken for a measurement.
+- **A missing voice must not cost you the writing.** `kreb audio` still writes
+  beats, script and an estimated timeline, names what is missing, and exits 1.
+  `--json` returns the same exit code as the human path.
+- **Duration is measured with `ffprobe`, never estimated from word count.**
+  Downstream, `scene_len = max(audio_len, min_duration)`; a duration wrong by a
+  second is a caption that outlives its scene.
 
 ## Environment notes
 
@@ -289,3 +322,15 @@ Carried from research; none blocks the build, all bear on whether it is worth it
    is a guess.
 3. **Can `verified` mean anything without a human?** Anchor rules prove a symbol
    exists, not that it supports the claim. No structural rule closes this.
+4. **Does `beats` carry enough for two renderers to diverge, or does it collapse
+   into a de-facto script?** Half-settled. The structure holds — a beat is one
+   point, a narration line is one *rendering* of that point, and the audio
+   renderer already adds material video would not need (a spoken title card, a
+   spoken caveat, a signposted background prefix). The other half needs real
+   model output on a real document and is not answerable from here. Fold one
+   `kreb audio` run into the Gate B follow-up rather than running it separately.
+5. **The hedge and signpost rules have never fired on real output.** The kreb
+   document is 6 `verified` / 2 `derived`, 6 `structure` / 2 `rationale` — zero
+   `speculative`, zero `background`. Both rules are mutation-verified in tests
+   and unexercised by the corpus. A document that hedges nothing is either a
+   confident document or a broken confidence signal, and that is worth knowing.
