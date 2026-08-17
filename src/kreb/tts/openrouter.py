@@ -170,7 +170,9 @@ class OpenRouterVoice:
         # A 200 carrying JSON is an error the transport did not flag. Reporting
         # it as "returned no audio" would send someone looking at their text.
         if "json" in kind.lower():
-            raise SpeechFailed(f"{self.model} answered with an error: {_detail(body)}")
+            raise SpeechFailed(
+                redact(f"{self.model} answered with an error: {_detail(body)}", key)
+            )
         return body, generation_id
 
 

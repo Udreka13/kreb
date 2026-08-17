@@ -646,6 +646,11 @@ def _plan_from_map(repo_map, index, *, depth: int, question: str = "") -> list:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Imported here rather than at module scope to keep `kreb --help` from
+    # loading the speech stack, and imported rather than restated so the default
+    # cannot drift from the engine's.
+    from kreb.tts.openrouter import DEFAULT_MODEL as DEFAULT_VOICE
+
     parser = argparse.ArgumentParser(prog="kreb", description=__doc__.split("\n")[0])
     parser.add_argument("--repo", default=".", help="repository to work on")
     parser.add_argument("--rev", default="HEAD", help="commit to pin the run to")
@@ -698,9 +703,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_audio = sub.add_parser("audio", help="narrate a document, and speak it if a voice exists")
     p_audio.add_argument("document")
+    # The free hosted voice, not `silence`. A default that produces a silent
+    # track is a default that makes the command look broken to anyone who runs
+    # it once; the no-key path already degrades honestly — script, estimated
+    # timeline, the missing key named, exit 1 — so there is nothing to protect.
     p_audio.add_argument(
         "--voice",
-        default="silence",
+        default=DEFAULT_VOICE,
         help=(
             "`silence` for a timed placeholder track, a path to a piper .onnx model, "
             "or an OpenRouter model id such as deepgram/flux-tts:free"

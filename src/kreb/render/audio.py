@@ -42,6 +42,15 @@ class SegmentTiming:
     seconds: float
     estimated: bool
     text: str
+    generation_id: str = ""
+    """A hosted engine's receipt for this segment, if there is one.
+
+    Empty for local engines, and empty for a segment served from cache — the
+    receipt belongs to the request that made the file, and a cached segment made
+    no request. So the trail is partial by construction, which is the honest
+    shape: it records what this run was actually billed for, not what the whole
+    document would cost.
+    """
 
     @property
     def end(self) -> float:
@@ -132,6 +141,7 @@ def build_audio(
         path = cache_dir / f"{segment_key(segment, engine)}.wav"
         cached = path.exists() and path.stat().st_size > 0
         spoken_seconds: float | None = None
+        generation_id = ""
         if cached:
             result.reused += 1
         else:
@@ -150,6 +160,7 @@ def build_audio(
                 continue
             result.synthesized += 1
             spoken_seconds = spoken.seconds or None
+            generation_id = spoken.generation_id
 
         measured = duration_of(path)
         seconds = measured if measured is not None else (spoken_seconds or 0.0)
@@ -161,6 +172,7 @@ def build_audio(
                 seconds=round(seconds, 3),
                 estimated=measured is None,
                 text=segment.text,
+                generation_id=generation_id,
             )
         )
         cursor += seconds
@@ -278,6 +290,7 @@ def timings_json(result: AudioResult) -> str:
                     "seconds": t.seconds,
                     "end": round(t.end, 3),
                     "estimated": t.estimated,
+                    "generation_id": t.generation_id,
                     "text": t.text,
                 }
                 for t in result.timings

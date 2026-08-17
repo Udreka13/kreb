@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import dataclass, field, replace
 
 import pytest
 
@@ -500,6 +501,70 @@ def test_the_timings_artifact_carries_the_engine_identity(tmp_path):
     payload = json.loads(timings_json(result))
     assert payload["engine"].startswith("silence/")
     assert payload["segments"][0]["end"] > payload["segments"][0]["start"]
+
+
+@has_ffmpeg
+def test_a_hosted_receipt_reaches_the_timings_artifact(tmp_path):
+    """The point of carrying a `generation_id` at all.
+
+    An id that stops at the engine boundary is a promise of a reconcilable trail
+    with no trail: nothing durable records what a paid run was billed for. It has
+    to land in the artifact or the claim should not be made.
+    """
+    narration = Narration(
+        title="T", question="", base_sha="abc",
+        segments=(
+            Segment(id="n000", section_id="s1", beat_order=0, text="A line.",
+                    confidence="derived", kind="structure"),
+        ),
+    )
+    result = build_audio(
+        narration, _ReceiptEngine(), out=tmp_path / "a.wav", cache_dir=tmp_path / "c"
+    )
+    assert result.ok, result.reason
+    assert json.loads(timings_json(result))["segments"][0]["generation_id"] == "gen-42"
+
+
+@has_ffmpeg
+def test_a_cached_segment_claims_no_receipt(tmp_path):
+    """A cached segment made no request, so it was billed for nothing. Copying
+    the first run's id onto it would double-count the one real charge."""
+    narration = Narration(
+        title="T", question="", base_sha="abc",
+        segments=(
+            Segment(id="n000", section_id="s1", beat_order=0, text="A line.",
+                    confidence="derived", kind="structure"),
+        ),
+    )
+    cache = tmp_path / "c"
+    build_audio(narration, _ReceiptEngine(), out=tmp_path / "a.wav", cache_dir=cache)
+    again = build_audio(narration, _ReceiptEngine(), out=tmp_path / "b.wav", cache_dir=cache)
+    assert again.reused == 1
+    assert again.timings[0].generation_id == ""
+
+
+@dataclass
+class _ReceiptEngine:
+    """A local engine that hands back a receipt, the way a hosted one does."""
+
+    inner: SilenceEngine = field(default_factory=SilenceEngine)
+
+    @property
+    def identity(self) -> str:
+        return "receipt/1"
+
+    @property
+    def sample_rate(self) -> int:
+        return self.inner.sample_rate
+
+    def check(self):
+        return self.inner.check()
+
+    def speak(self, text, out):
+        spoken = self.inner.speak(text, out)
+        if not spoken.ok:
+            return spoken
+        return replace(spoken, generation_id="gen-42")
 
 
 @has_ffmpeg

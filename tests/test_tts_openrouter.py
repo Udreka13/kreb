@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from kreb.cli import engine_for
 from kreb.media import duration_of
 from kreb.tts.openrouter import (
     DEFAULT_MODEL,
@@ -269,6 +270,29 @@ def test_an_error_reason_never_leaks_the_key():
     assert "[REDACTED]" in reason
 
 
+def test_a_two_hundred_carrying_json_does_not_leak_the_key_either(keyed, tmp_path, monkeypatch):
+    """The error-inside-a-200 path is easy to forget when the redaction lives on
+    the two obvious failure branches."""
+
+    class Reply:
+        headers = {"Content-Type": "application/json"}
+
+        def read(self):
+            return f'{{"error":"bad key {keyed}"}}'.encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: Reply())
+    spoken = OpenRouterVoice().speak("hello", tmp_path / "seg.wav")
+    assert not spoken.ok
+    assert keyed not in spoken.reason
+    assert "[REDACTED]" in spoken.reason
+
+
 def test_an_unreadable_body_still_reports_the_status():
     class Unreadable(urllib.error.HTTPError):
         def read(self):
@@ -296,6 +320,16 @@ def test_the_default_model_is_the_free_one():
     assert OpenRouterVoice().model == DEFAULT_MODEL
 
 
+def test_the_command_defaults_to_the_same_voice_the_engine_does():
+    """Two defaults that can disagree eventually do. PLAN.md documents one of
+    them, and the one people actually get is the parser's."""
+    from kreb.cli import build_parser
+
+    args = build_parser().parse_args(["audio", "doc.json"])
+    assert args.voice == DEFAULT_MODEL
+    assert isinstance(engine_for(args), OpenRouterVoice)
+
+
 # -- CLI dispatch -----------------------------------------------------------
 
 
@@ -304,14 +338,12 @@ def _args(voice: str, **extra) -> Namespace:
 
 
 def test_silence_selects_the_placeholder_engine():
-    from kreb.cli import engine_for
     from kreb.tts.silence import SilenceEngine
 
     assert isinstance(engine_for(_args("silence")), SilenceEngine)
 
 
 def test_an_onnx_path_selects_piper():
-    from kreb.cli import engine_for
     from kreb.tts.piper import PiperEngine
 
     engine = engine_for(_args("voices/en_US-amy.onnx"))
@@ -323,15 +355,12 @@ def test_an_onnx_path_wins_over_the_slash_rule():
     """A piper path almost always contains a slash. Read as a model id it would
     be posted to a hosted API, and the failure would arrive as a network error
     about a filesystem path."""
-    from kreb.cli import engine_for
     from kreb.tts.piper import PiperEngine
 
     assert isinstance(engine_for(_args("/opt/voices/a/b.onnx")), PiperEngine)
 
 
 def test_a_slashed_name_selects_the_hosted_engine():
-    from kreb.cli import engine_for
-
     engine = engine_for(_args("deepgram/flux-tts:free", voice_name="nova", speed=1.2))
     assert isinstance(engine, OpenRouterVoice)
     assert engine.model == "deepgram/flux-tts:free"
@@ -342,8 +371,6 @@ def test_a_slashed_name_selects_the_hosted_engine():
 def test_an_unrecognized_voice_is_refused_by_name():
     """Guessing between a typo'd filename and an unfamiliar model id gets one of
     them wrong, and both surface much later as something unrelated."""
-    from kreb.cli import engine_for
-
     with pytest.raises(ValueError) as caught:
         engine_for(_args("amy"))
     assert "silence" in str(caught.value) and ".onnx" in str(caught.value)

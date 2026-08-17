@@ -44,7 +44,7 @@ until they are green.
 | 11 | `progress/` event stream | **done** | 22 tests; stderr only, MCP-shaped |
 | 12 | `doc/gate_b` + worksheet | **done** | 23 tests; builds the sheet, scores nothing |
 | — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
-| 13 | `render/beats` + `render/narration` + `tts/` + audio | **done** | 67 tests; three voices: silence, piper, hosted |
+| 13 | `render/beats` + `render/narration` + `tts/` + audio | **done** | 71 tests; three voices: silence, piper, hosted |
 | 14 | `render/storyboard` + video | pending | consumes `beats` + `timings` |
 | 15 | `mcp/` | pending | deferred deliberately |
 
@@ -310,10 +310,14 @@ Recorded so they are not relitigated:
   `silence`, `*.onnx`, or a slashed model id; anything else is refused by name.
   `.onnx` is tested before the slash rule, because a piper path usually has a
   slash too and being read as a model id posts a filesystem path to an API.
-- **A hosted segment carries its `generation_id`, not a price.** Resolving cost
-  is one extra request per segment against an endpoint that lags the generation,
-  and on the free default the cost is exactly zero. An unreconciled receipt is
-  honest about being unreconciled; a guessed number would not be.
+- **A hosted segment carries its `generation_id`, not a price** — and it reaches
+  `timings.json`, because an id that stops at the engine boundary is a promise of
+  a reconcilable trail with no trail. Resolving cost is one extra request per
+  segment against an endpoint that lags the generation, and on the free default
+  the cost is exactly zero. An unreconciled receipt is honest about being
+  unreconciled; a guessed number would not be. Cached segments carry no id: they
+  made no request, and copying the first run's id onto them would double-count
+  the one real charge.
 - **A missing voice must not cost you the writing.** `kreb audio` still writes
   beats, script and an estimated timeline, names what is missing, and exits 1.
   `--json` returns the same exit code as the human path.
