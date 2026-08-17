@@ -162,6 +162,44 @@ def cmd_render(args) -> int:
     return 0
 
 
+def cmd_gate_b(args) -> int:
+    """Build the Gate B worksheet. No model calls, no key required.
+
+    Deliberately exits 0 whatever the document says: this command produces the
+    sheet, and the verdict is the reader's. An exit code here would be the
+    pipeline grading itself on the one axis it is being tested for.
+    """
+    from kreb.doc.gate_b import build as build_sheet
+    from kreb.render import worksheet as worksheet_render
+
+    doc = Document.read(args.document)
+    repo = _repo(args)
+    sheet = build_sheet(doc, build_index(repo), repo)
+
+    if args.json:
+        _emit(
+            {
+                "claims": len(sheet.claims),
+                "verified_claims": len(sheet.verified_claims),
+                "thresholds": {"novel_true": 3, "wrong_at_verified": 0},
+                "caveats": list(sheet.caveats),
+            },
+            as_json=True,
+        )
+        return 0
+
+    render = worksheet_render.render_markdown if args.format == "md" else worksheet_render.render
+    output = render(sheet)
+    if args.out:
+        destination = Path(args.out)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(output, encoding="utf-8")
+        print(destination.resolve())
+    else:
+        sys.stdout.write(output)
+    return 0
+
+
 def cmd_doc(args) -> int:
     """Run research and write a document. This is the command that spends money."""
     from kreb.budget.ledger import Ledger
@@ -379,6 +417,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate = sub.add_parser("validate", help="run Gate A against the repository")
     p_validate.add_argument("document")
     p_validate.set_defaults(func=cmd_validate)
+
+    p_gate_b = sub.add_parser(
+        "gate-b", help="build the Gate B worksheet — the claims, and the code they cite"
+    )
+    p_gate_b.add_argument("document")
+    p_gate_b.add_argument("--format", default="html", choices=["html", "md"])
+    p_gate_b.add_argument("--out", default="")
+    p_gate_b.set_defaults(func=cmd_gate_b)
 
     return parser
 

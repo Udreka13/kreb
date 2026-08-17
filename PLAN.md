@@ -42,10 +42,11 @@ until they are green.
 | 9 | `viz/` + `render/html` + `render/markdown` | **done** | zero-JS HTML; d2 degrades |
 | 10 | `cli/` | **done** | argparse; runs keyless except `doc` |
 | 11 | `progress/` event stream | **done** | 22 tests; stderr only, MCP-shaped |
+| 12 | `doc/gate_b` + worksheet | **done** | 23 tests; builds the sheet, scores nothing |
 | — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
-| 12 | `render/beats` + audio | pending | |
-| 13 | `render/storyboard` + video | pending | |
-| 14 | `mcp/` | pending | deferred deliberately |
+| 13 | `render/beats` + audio | pending | |
+| 14 | `render/storyboard` + video | pending | |
+| 15 | `mcp/` | pending | deferred deliberately |
 
 ## The three fatal bugs and their detectors
 
@@ -229,6 +230,15 @@ Recorded so they are not relitigated:
   is why MCP needs no new instrumentation when it arrives.
 - **`auto` is quiet when stderr is not a terminal.** An unattended run should
   not fill a log with lines nobody reads; `--progress plain` forces them on.
+- **Gate B is conducted on a repository the reader knows cold, never on kreb.**
+  On kreb's own code every claim is novel to its author, so the ≥3 bar passes by
+  construction, and nothing is cheaply checkable, so the zero-wrong bar cannot be
+  tested at all. A gate that cannot fail is not a gate.
+- **The Gate B harness scores nothing.** Novelty is not observable from inside
+  the artifact, and asking the pipeline to grade its own truthfulness on the one
+  axis it is being tested for is a mirror, not a gate. What is automatable is the
+  *cost* of judging: the sheet puts each claim beside the source its anchors cite,
+  so the reader decides and never navigates. `kreb gate-b` exits 0 always.
 - **No default spend cap.** Every ceiling is optional. The engine does not
   truncate research to hit a number nobody chose.
 - **A ceiling cannot be exact.** A call's cost is unknown until it returns, so
