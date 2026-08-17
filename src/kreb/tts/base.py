@@ -38,6 +38,17 @@ class Spoken:
     path: Path | None
     seconds: float = 0.0
     reason: str = ""
+    generation_id: str = ""
+    """A hosted engine's receipt for this segment, empty for local ones.
+
+    Carried rather than resolved into a cost here. Looking the price up is one
+    extra request per segment against an endpoint that lags behind the
+    generation, and the recommended voice is free, where the cost is exactly
+    zero and needs no lookup. What this buys is that a paid run leaves a trail
+    someone can reconcile — the project's rule is that cost is measured, and an
+    unreconciled receipt is honest about being unreconciled in a way that a
+    guessed number would not be.
+    """
 
     @property
     def ok(self) -> bool:

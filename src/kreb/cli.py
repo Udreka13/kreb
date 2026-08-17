@@ -201,6 +201,45 @@ def cmd_gate_b(args) -> int:
     return 0
 
 
+def engine_for(args):
+    """Pick a speech engine from `--voice`, by the shape of what was passed.
+
+    One flag rather than a `--tts-backend` selector plus a target, because the
+    three forms are unambiguous and a selector that can disagree with its target
+    is a way to be told one thing and get another:
+
+      `silence`        the timed placeholder track — no engine, no key, no cost
+      `*.onnx`         a piper voice model on disk (checked first: a piper path
+                       usually contains a slash too, and being read as a model
+                       id would send a filesystem path to a hosted API)
+      `has/a/slash`    an OpenRouter model id, e.g. `deepgram/flux-tts:free`
+
+    Anything else is refused by name. Guessing between "a typo'd filename" and
+    "a model id I have not heard of" gets one of them wrong, and both failures
+    surface much later as a network error about a path.
+    """
+    from kreb.tts.openrouter import OpenRouterVoice
+    from kreb.tts.piper import PiperEngine
+    from kreb.tts.silence import SilenceEngine
+
+    voice = (args.voice or "").strip()
+    if voice == "silence":
+        return SilenceEngine()
+    if voice.endswith(".onnx"):
+        return PiperEngine(voice=Path(voice))
+    if "/" in voice:
+        return OpenRouterVoice(
+            model=voice,
+            voice=getattr(args, "voice_name", "") or "",
+            speed=getattr(args, "speed", 1.0) or 1.0,
+        )
+    raise ValueError(
+        f"--voice {voice!r} is none of the three forms: `silence`, a path ending "
+        "in .onnx (piper), or an OpenRouter model id containing a slash "
+        "(e.g. deepgram/flux-tts:free)"
+    )
+
+
 def cmd_audio(args) -> int:
     """Turn a document into spoken narration, and into audio if a voice exists.
 
@@ -223,8 +262,12 @@ def cmd_audio(args) -> int:
     from kreb.render import beats as beats_mod
     from kreb.render import narration as narration_mod
     from kreb.render.audio import build_audio, timings_json
-    from kreb.tts.piper import PiperEngine
-    from kreb.tts.silence import SilenceEngine
+
+    try:
+        engine = engine_for(args)
+    except ValueError as exc:
+        print(f"kreb audio: {exc}", file=sys.stderr)
+        return 2
 
     doc = Document.read(args.document)
     repo = _repo(args)
@@ -233,12 +276,6 @@ def cmd_audio(args) -> int:
     kreb_dir = Path(args.repo) / ".kreb"
     out_dir = Path(args.out) if args.out else kreb_dir / "audio"
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    engine = (
-        SilenceEngine()
-        if args.voice == "silence"
-        else PiperEngine(voice=Path(args.voice) if args.voice else None)
-    )
 
     reporter = reporter_for("none" if args.quiet else args.progress, sys.stderr)
     progress = Progress(reporter)
@@ -664,7 +701,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_audio.add_argument(
         "--voice",
         default="silence",
-        help="path to a piper voice model, or `silence` for a timed placeholder track",
+        help=(
+            "`silence` for a timed placeholder track, a path to a piper .onnx model, "
+            "or an OpenRouter model id such as deepgram/flux-tts:free"
+        ),
+    )
+    p_audio.add_argument(
+        "--voice-name",
+        default="",
+        help="which voice within a hosted model (names are per-model); omitted if unset",
+    )
+    p_audio.add_argument(
+        "--speed", type=float, default=1.0, help="hosted speaking rate, 1.0 is normal"
     )
     p_audio.add_argument("--profile", default="balanced", choices=["budget", "balanced", "max"])
     p_audio.add_argument("--max-cost", type=float, default=None)

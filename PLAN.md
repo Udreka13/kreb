@@ -44,7 +44,7 @@ until they are green.
 | 11 | `progress/` event stream | **done** | 22 tests; stderr only, MCP-shaped |
 | 12 | `doc/gate_b` + worksheet | **done** | 23 tests; builds the sheet, scores nothing |
 | — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
-| 13 | `render/beats` + `render/narration` + `tts/` + audio | **done** | 34 tests; runs voiceless, says so |
+| 13 | `render/beats` + `render/narration` + `tts/` + audio | **done** | 67 tests; three voices: silence, piper, hosted |
 | 14 | `render/storyboard` + video | pending | consumes `beats` + `timings` |
 | 15 | `mcp/` | pending | deferred deliberately |
 
@@ -294,6 +294,26 @@ Recorded so they are not relitigated:
   artifact are buildable and checkable on a machine with no TTS at all — which
   is most machines. Every timing it produces is flagged `estimated`, so a
   word-count estimate can never be mistaken for a measurement.
+- **The default voice is hosted and free.** `deepgram/flux-tts:free` on the
+  OpenRouter key the project already uses — priced "0" on both prompt and
+  completion, so the cost of `kreb audio` is exactly zero and needs no lookup.
+  A default that cost money per paragraph would make narration something you
+  think twice about running. Piper stays as the offline adapter rather than
+  being deleted: a hosted alias can be re-pointed at a new build without
+  anything here noticing, and a hashed local voice cannot.
+- **The hosted engine asks for `mp3`, not the endpoint's default `pcm`.** The
+  PCM it returns is headerless — no rate, no channel count, nothing `ffprobe`
+  can read — and a pipeline whose central promise is *durations are measured*
+  cannot accept a stream that cannot be measured. Re-encoding to wav at a
+  declared rate is also what makes the model's own output rate stop mattering.
+- **`--voice` is dispatched by shape, not by a separate backend selector.**
+  `silence`, `*.onnx`, or a slashed model id; anything else is refused by name.
+  `.onnx` is tested before the slash rule, because a piper path usually has a
+  slash too and being read as a model id posts a filesystem path to an API.
+- **A hosted segment carries its `generation_id`, not a price.** Resolving cost
+  is one extra request per segment against an endpoint that lags the generation,
+  and on the free default the cost is exactly zero. An unreconciled receipt is
+  honest about being unreconciled; a guessed number would not be.
 - **A missing voice must not cost you the writing.** `kreb audio` still writes
   beats, script and an estimated timeline, names what is missing, and exits 1.
   `--json` returns the same exit code as the human path.
@@ -349,3 +369,15 @@ Carried from research; none blocks the build, all bear on whether it is worth it
    `speculative`, zero `background`. Both rules are mutation-verified in tests
    and unexercised by the corpus. A document that hedges nothing is either a
    confident document or a broken confidence signal, and that is worth knowing.
+
+6. **The hosted voice has never made a real request.** Built against the
+   documented contract and the model listing, exercised end-to-end against real
+   mp3 bytes through the real decode path, and never once called. Three things
+   are unknown and only one keyed run answers all of them: whether
+   `deepgram/flux-tts` requires a `voice` (it is sent only when set, so the
+   first failure will say so), what the `:free` rate limit is per day and how a
+   429 body reads, and how long a request may be — an 18-segment narration is
+   18 requests, and if there is a per-minute cap the run will hit it. None of
+   these block the code: a capped run fails per segment with the body text as
+   its reason, and the per-segment cache means rerunning resumes where it
+   stopped. Fold it into the same keyed session as Gate B.
