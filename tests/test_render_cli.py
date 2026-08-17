@@ -307,6 +307,48 @@ def test_cli_doc_without_a_key_explains_where_to_put_one(project, monkeypatch, c
     assert "OPENROUTER_API_KEY" in err and "kreb.toml" in err
 
 
+def test_the_plan_follows_the_question_not_just_centrality(project):
+    """Ranking by centrality alone answers "what is this built around", which is
+    a fine question and usually not the one that was asked — producing a
+    plausible-looking non-answer."""
+    from kreb.cli import plan_sections
+    from kreb.index.repo_map import build_map
+
+    (project / "backoff.py").write_text(
+        "def compute_backoff(attempt):\n    return attempt * 2\n"
+    )
+    (project / "unrelated.py").write_text("def render_template(name):\n    return name\n")
+    _git(project, "add", "-A")
+    _git(project, "commit", "-q", "-m", "more")
+    index = build_index(Repository(project))
+
+    plan = plan_sections(build_map(index), index, question="how is backoff computed?", depth=1)
+    assert plan
+    assert "compute_backoff" in plan[0].refs[0]
+
+
+def test_a_question_with_no_lexical_hits_still_plans_something(project):
+    """Degrade to the central symbols rather than to nothing."""
+    from kreb.cli import plan_sections
+    from kreb.index.repo_map import build_map
+
+    index = build_index(Repository(project))
+    plan = plan_sections(build_map(index), index, question="zzzz qqqq", depth=1)
+    assert plan
+
+
+def test_planning_is_reproducible(project):
+    """The section writer is the only place nondeterminism may enter."""
+    from kreb.cli import plan_sections
+    from kreb.index.repo_map import build_map
+
+    index = build_index(Repository(project))
+    repo_map = build_map(index)
+    first = [p.refs[0] for p in plan_sections(repo_map, index, question="retries", depth=2)]
+    second = [p.refs[0] for p in plan_sections(repo_map, index, question="retries", depth=2)]
+    assert first == second
+
+
 def test_cli_reports_errors_without_a_traceback(capsys):
     assert main(["--repo", "/nonexistent", "index"]) == 1
     assert "error:" in capsys.readouterr().err

@@ -193,7 +193,7 @@ def cmd_doc(args) -> int:
         budget=budget,
     )
 
-    plan = _plan_from_map(repo_map, index, depth=args.depth)
+    plan = plan_sections(repo_map, index, question=args.question, depth=args.depth)
     if not plan:
         print("nothing to write: the repository has no indexed symbols", file=sys.stderr)
         return 1
@@ -246,30 +246,89 @@ def cmd_doc(args) -> int:
     return 0 if report.complete else 1
 
 
-def _plan_from_map(repo_map, index, *, depth: int) -> list:
-    """A deterministic outline from the repo map.
+# Words that carry no signal about which symbols a question is about.
+_STOPWORDS = frozenset(
+    """the a an and or but of for to in on at by with from is are was were be been
+    how why what which when where who does do did can could should would will shall
+    this that these those it its as if then than so such not no nor kreb code
+    codebase repo repository work works working use used using handle handled""".split()
+)
 
-    Model-planned outlines come later; this is model-free, which means `kreb
-    doc` has exactly one place where nondeterminism enters (the section writer)
-    and the plan is reproducible across runs.
+
+def _terms(text: str) -> set[str]:
+    """Content words from a question, split so `snake_case` matches too."""
+    import re
+
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return {w for w in words if len(w) > 2 and w not in _STOPWORDS}
+
+
+def _relevance(question_terms: set[str], ref: str) -> float:
+    """How much a symbol's name and path overlap the question's content words."""
+    if not question_terms:
+        return 0.0
+    haystack = _terms(ref.replace("/", " ").replace("#", " ").replace(".", " "))
+    if not haystack:
+        return 0.0
+    hits = sum(
+        1
+        for term in question_terms
+        if term in haystack or any(term in word or word in term for word in haystack)
+    )
+    return hits / len(question_terms)
+
+
+def plan_sections(repo_map, index, *, question: str, depth: int) -> list:
+    """A deterministic outline, ranked by relevance to the question.
+
+    Model-free on purpose: `kreb doc` then has exactly one place where
+    nondeterminism enters — the section writer — and the same question against
+    the same commit plans the same sections every time.
+
+    Centrality alone is not enough. Ranking purely by it answers "what is this
+    repository built around", which is a fine question and usually not the one
+    that was asked; a document about the eight most-imported symbols is a
+    plausible-looking non-answer. Relevance leads and centrality breaks ties, so
+    a question with no lexical hits still degrades to the central symbols rather
+    than to nothing.
     """
     from kreb.research.loop import PlannedSection
 
-    top = repo_map.central_symbols[: max(3, depth * 4)]
+    question_terms = _terms(question)
+    pool = repo_map.central_symbols[:80] or []
+    if not pool:
+        return []
+
+    top_score = max((score for _ref, score in pool), default=1.0) or 1.0
+    ranked = sorted(
+        pool,
+        key=lambda item: (
+            -(0.7 * _relevance(question_terms, item[0]) + 0.3 * (item[1] / top_score)),
+            item[0],
+        ),
+    )
+
+    wanted = max(3, depth * 4)
     plan = []
-    for position, (ref, _score) in enumerate(top):
+    for position, (ref, _score) in enumerate(ranked[:wanted]):
         symbol = index.resolve(ref)
         if symbol is None:
             continue
         plan.append(
             PlannedSection(
                 id=f"s{position:02d}-{symbol.name.lower().replace('_', '-')[:40]}",
-                title=symbol.qualname,
+                # Archaeology is the expensive-but-free part, so it is spent on
+                # the most relevant symbols rather than an arbitrary prefix.
                 kind="rationale" if position < depth else "structure",
+                title=symbol.qualname,
                 refs=[ref],
             )
         )
     return plan
+
+
+def _plan_from_map(repo_map, index, *, depth: int, question: str = "") -> list:
+    return plan_sections(repo_map, index, question=question, depth=depth)
 
 
 def build_parser() -> argparse.ArgumentParser:
