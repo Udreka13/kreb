@@ -19,12 +19,14 @@ does not regenerate a document.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 
 from kreb.archaeology.history import Commit, symbol_history
 from kreb.budget.policy import Decision
 from kreb.doc.schema import Capabilities, Document, Section, SectionKind
 from kreb.index.repo_index import RepoIndex
+from kreb.progress import Progress, Reporter
 from kreb.provider.metered import MeteredProvider
 from kreb.repo.access import Repository
 from kreb.research.context import build_pack
@@ -54,6 +56,9 @@ class RunReport:
     reused: list[str] = field(default_factory=list)
     failed: dict[str, list[str]] = field(default_factory=dict)
     skipped: list[str] = field(default_factory=list)
+    # section id -> generations it took. A section needing three is the
+    # signal that a validation rule has become expensive.
+    attempts: dict[str, int] = field(default_factory=dict)
     stopped_early: bool = False
     stop_reason: str = ""
     cost: float = 0.0
@@ -88,6 +93,7 @@ def run_research(
     map_summary: str = "",
     archaeology: bool = True,
     max_attempts: int = 3,
+    reporter: Reporter | None = None,
 ) -> RunReport:
     """Write every planned section, reusing what is still valid."""
     caps = capabilities or Capabilities(base_sha=index.sha)
@@ -95,10 +101,20 @@ def run_research(
     report = RunReport(document=Document(title=title, question=question, capabilities=caps))
     start_cost = provider.ledger.total()
     revert_cache: dict[str, list[Commit]] = {}
+    progress = Progress(reporter, total=len(plan))
+    progress.emit(
+        "run_started",
+        model=provider.model_for("research"),
+        ceiling=provider.budget.max_per_run,
+        question=question,
+    )
 
     for position, planned in enumerate(plan):
         decision = provider.budget.decide(provider.ledger, phase=provider.phase)
+        if decision.warn and not decision.stop:
+            progress.emit("budget_warning", decision.reason)
         if decision.stop:
+            progress.emit("run_stopped", decision.reason)
             # Everything from here on is deliberately not attempted, and named
             # as such — a document that is quietly shorter than it should be is
             # indistinguishable from one that had nothing more to say.
@@ -106,6 +122,11 @@ def run_research(
             report.stop_reason = decision.reason
             report.skipped = [p.id for p in plan[position:]]
             break
+
+        progress.advance()
+        progress.emit("section_started", id=planned.id, title=planned.title, kind=planned.kind)
+        began = time.time()
+        before = provider.ledger.total()
 
         result = _section(
             planned=planned,
@@ -119,6 +140,21 @@ def run_research(
             max_attempts=max_attempts,
             revert_cache=revert_cache,
             report=report,
+            progress=progress,
+        )
+        if planned.id in report.reused:
+            status = "reused"
+        elif result is not None:
+            status = "written"
+        else:
+            status = "failed"
+        progress.emit(
+            "section_done",
+            id=planned.id,
+            status=status,
+            cost=provider.ledger.total() - before,
+            attempts=report.attempts.get(planned.id, 1),
+            elapsed=time.time() - began,
         )
         if result is not None:
             sections.append(result)
@@ -129,6 +165,14 @@ def run_research(
             )
 
     report.cost = provider.ledger.total() - start_cost
+    progress.emit(
+        "run_finished",
+        written=len(report.written),
+        reused=len(report.reused),
+        failed=len(report.failed),
+        skipped=len(report.skipped),
+        cost=report.cost,
+    )
     return report
 
 
@@ -145,9 +189,12 @@ def _section(
     max_attempts: int,
     revert_cache: dict,
     report: RunReport,
+    progress: Progress | None = None,
 ) -> Section | None:
     histories = []
     if archaeology and planned.kind == "rationale":
+        if progress is not None:
+            progress.emit("archaeology", id=planned.id)
         # Only rationale sections need history: structure sections are answered
         # by the code in front of them, and a pickaxe per symbol is the most
         # expensive thing in the pipeline that costs no money.
@@ -189,7 +236,9 @@ def _section(
             provider=provider,
             max_attempts=max_attempts,
             parent_id=planned.parent_id,
+            progress=progress,
         )
+        report.attempts[planned.id] = result.attempts
         if not result.ok:
             raise _SectionFailed(result)
 
@@ -220,7 +269,9 @@ def _section(
                 provider=provider,
                 max_attempts=max_attempts,
                 parent_id=planned.parent_id,
+                progress=progress,
             )
+            report.attempts[planned.id] = result.attempts
         except Exception as exc:  # pragma: no cover - defensive
             report.failed[planned.id] = [str(exc)]
             return None

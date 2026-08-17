@@ -23,6 +23,7 @@ from kreb.budget.ledger import Charge
 from kreb.doc.schema import Section, SectionKind
 from kreb.index.repo_index import RepoIndex
 from kreb.provider.metered import MeteredProvider
+from kreb.progress import Progress
 from kreb.provider.types import Message, Request
 from kreb.research.context import ContextPack
 from kreb.research.draft import materialize, parse_draft
@@ -59,6 +60,7 @@ def write_section(
     role: str = "research",
     max_attempts: int = 3,
     parent_id: str | None = None,
+    progress: Progress | None = None,
 ) -> WriteResult:
     """Generate one section, retrying only on mechanically-checkable failures."""
     system = BACKGROUND_SYSTEM if kind == "background" else SECTION_SYSTEM
@@ -104,6 +106,19 @@ def write_section(
                     attempt=attempt,
                     failed=bool(failures),
                 )
+            )
+
+        if progress is not None:
+            # Emitted for every attempt, not only the rejections: a section that
+            # needed three tries is a fact about the run, and it is the signal
+            # that a validation rule has become expensive.
+            progress.emit(
+                "attempt",
+                id=section_id,
+                attempt=attempt,
+                failed=bool(failures),
+                cost=completion.usage.cost,
+                reason="; ".join(failures)[:200],
             )
 
         if not failures:

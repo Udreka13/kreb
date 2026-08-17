@@ -41,10 +41,11 @@ until they are green.
 | 8 | `research/` outline + writers + stitch | **done** | section is the DAG unit |
 | 9 | `viz/` + `render/html` + `render/markdown` | **done** | zero-JS HTML; d2 degrades |
 | 10 | `cli/` | **done** | argparse; runs keyless except `doc` |
+| 11 | `progress/` event stream | **done** | 22 tests; stderr only, MCP-shaped |
 | — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
-| 11 | `render/beats` + audio | pending | |
-| 12 | `render/storyboard` + video | pending | |
-| 13 | `mcp/` | pending | deferred deliberately |
+| 12 | `render/beats` + audio | pending | |
+| 13 | `render/storyboard` + video | pending | |
+| 14 | `mcp/` | pending | deferred deliberately |
 
 ## The three fatal bugs and their detectors
 
@@ -220,6 +221,14 @@ Recorded so they are not relitigated:
   2026-08-16; the old `usage: {include: true}` is deprecated). A fallback
   estimate is allowed but is flagged `cost_is_estimated`, and the estimated
   share of a run is reportable.
+- **Progress goes to stderr, as events, never as prints.** stdout carries the
+  contract — artifact paths and `--json` payloads — so an adapter piping it into
+  a parser must not receive chatter. The engine emits typed `Event`s carrying
+  `seq`/`done`/`total` and never formats; the CLI, a JSONL sink and (later) MCP
+  `notifications/progress` are interchangeable sinks over the same stream. This
+  is why MCP needs no new instrumentation when it arrives.
+- **`auto` is quiet when stderr is not a terminal.** An unattended run should
+  not fill a log with lines nobody reads; `--progress plain` forces them on.
 - **No default spend cap.** Every ceiling is optional. The engine does not
   truncate research to hit a number nobody chose.
 - **A ceiling cannot be exact.** A call's cost is unknown until it returns, so

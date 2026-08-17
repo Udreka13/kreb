@@ -170,6 +170,7 @@ def cmd_doc(args) -> int:
     from kreb.doc.schema import Capabilities
     from kreb.provider.metered import MeteredProvider
     from kreb.provider.openrouter import OpenRouterProvider
+    from kreb.progress import reporter_for
     from kreb.research.loop import PlannedSection, run_research
     from kreb.store.store import ArtifactStore
 
@@ -210,6 +211,10 @@ def cmd_doc(args) -> int:
         dirty=repo.caps.dirty,
     )
 
+    # Progress goes to stderr so stdout keeps carrying only the contract:
+    # artifact paths and --json payloads.
+    reporter = reporter_for("none" if args.quiet else args.progress, sys.stderr)
+
     report = run_research(
         plan=plan,
         question=args.question,
@@ -219,6 +224,7 @@ def cmd_doc(args) -> int:
         store=store,
         capabilities=caps,
         title=args.title or f"{Path(args.repo).resolve().name}: {args.question}",
+        reporter=reporter,
     )
 
     out = Path(args.out or (kreb_dir / "docs" / "document.json"))
@@ -354,6 +360,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="ceiling in currency; omitted means no ceiling")
     p_doc.add_argument("--title", default="")
     p_doc.add_argument("--out", default="")
+    p_doc.add_argument(
+        "--progress",
+        default="auto",
+        choices=["auto", "plain", "json", "none"],
+        help="progress on stderr: auto (human on a terminal), plain (always), "
+        "json (JSON Lines, for adapters), none",
+    )
+    p_doc.add_argument("--quiet", action="store_true", help="no progress output")
     p_doc.set_defaults(func=cmd_doc)
 
     p_render = sub.add_parser("render", help="render an existing document")
