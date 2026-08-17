@@ -63,7 +63,7 @@ HEDGES: tuple[str, ...] = (
     "seem to",
     "suggests",
     "suggest",
-    "may ",
+    "may",
     "might",
     "could",
     "possibly",
@@ -77,6 +77,13 @@ HEDGES: tuple[str, ...] = (
     "no evidence",
     "without confirming",
     "worth checking",
+)
+
+# Word-boundary alternation over the allowlist, longest first so "appears to"
+# is preferred over a bare "appear" that is not in the list anyway.
+_HEDGE_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(h) for h in sorted(HEDGES, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
 )
 
 _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
@@ -148,9 +155,15 @@ class ScriptDraft(BaseModel):
 
 
 def has_hedge(text: str) -> bool:
-    """Whether a segment carries an audible hedge from the allowlist."""
-    lowered = " " + text.lower() + " "
-    return any(h in lowered for h in HEDGES)
+    """Whether a segment carries an audible hedge from the allowlist.
+
+    Matched on word boundaries, not as substrings. Substring matching fails in
+    both directions and both are reachable: "The mighty parser" contains
+    "might" and would pass unhedged, while a line ending "…as it may." would
+    fail because the pattern carried a trailing space. A rule this load-bearing
+    must not be defeatable by a coincidence of spelling.
+    """
+    return _HEDGE_RE.search(text) is not None
 
 
 def speakable(text: str) -> str:

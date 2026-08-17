@@ -246,10 +246,24 @@ def cmd_audio(args) -> int:
     beats_path = out_dir / "beats.json"
     narration_path = out_dir / "narration.json"
 
+    # Re-synthesizing is free; re-writing is not. Reusing the prose by default is
+    # what makes "try a different voice" a cheap experiment — but only for the
+    # document it was written from. `out_dir` defaults to one fixed path, so
+    # narrating a second document without this check silently replays the
+    # first one's beats. Existence is not identity.
+    cached_plan = None
     if beats_path.exists() and narration_path.exists() and not args.regen:
-        # Re-synthesizing is free; re-writing is not. Reusing the prose by
-        # default is what makes "try a different voice" a cheap experiment.
-        plan = beats_mod.from_json(beats_path.read_text(encoding="utf-8"))
+        cached_plan = beats_mod.from_json(beats_path.read_text(encoding="utf-8"))
+        if not cached_plan.matches(doc):
+            print(
+                f"{beats_path} was written from a different document "
+                f"({cached_plan.title!r}); rewriting the beats for this one",
+                file=sys.stderr,
+            )
+            cached_plan = None
+
+    if cached_plan is not None:
+        plan = cached_plan
         narration = narration_mod.from_json(narration_path.read_text(encoding="utf-8"))
         spent = 0.0
     else:
@@ -312,8 +326,10 @@ def cmd_audio(args) -> int:
                 "segments": len(narration.segments),
                 "seconds": round(result.seconds, 2),
                 "estimated": result.estimated,
+                "complete": result.complete,
                 "synthesized": result.synthesized,
                 "reused": result.reused,
+                "failures": result.failures,
                 "reason": result.reason,
                 "cost": round(spent, 6),
             },
@@ -322,7 +338,7 @@ def cmd_audio(args) -> int:
         # Same exit code as the human path. Returning 0 here because the JSON
         # was emitted successfully would make `--json` the flag that hides
         # failures from exactly the callers most likely to be scripting them.
-        return 0 if result.ok else 1
+        return 0 if result.complete else 1
 
     minutes, seconds = divmod(int(result.seconds), 60)
     length = f"{minutes}:{seconds:02d}" + (" (estimated)" if result.estimated else "")
@@ -332,9 +348,11 @@ def cmd_audio(args) -> int:
     for failure in result.failures[:5]:
         print(f"  {failure}", file=sys.stderr)
     print((result.path or narration_path).resolve())
-    # Exit 1 when there is no audio: unlike Gate B, this command has a
-    # mechanical definition of success and a caller scripting it needs to know.
-    return 0 if result.ok else 1
+    # Exit 1 when the audio is absent *or* incomplete: unlike Gate B, this
+    # command has a mechanical definition of success and a caller scripting it
+    # needs to know. A file that plays cleanly and is missing a section is not
+    # a success just because it opened.
+    return 0 if result.complete else 1
 
 
 def cmd_doc(args) -> int:

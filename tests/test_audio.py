@@ -28,6 +28,7 @@ from kreb.render.beats import (
     Beat,
     BeatsPlan,
     allowed_symbols,
+    document_digest,
     plan_beats,
     unlicensed_symbols,
 )
@@ -130,6 +131,24 @@ def _beat(order=0, *, confidence="derived", kind="structure", point="The delay d
         confidence=confidence,
         kind=kind,
         order=order,
+    )
+
+
+def _seed(out, doc, *, text="The delay doubles."):
+    """Write a beats/narration pair that legitimately belongs to `doc`."""
+    plan = _plan(_beat(point=text))
+    plan.doc_digest = document_digest(doc)
+    (out / "beats.json").write_text(beats_to_json(plan))
+    (out / "narration.json").write_text(
+        json.dumps(
+            {
+                "title": "T", "question": "", "base_sha": "abc",
+                "segments": [
+                    {"id": "n000", "section_id": "s1", "beat_order": 0, "text": text,
+                     "confidence": "derived", "kind": "structure", "role": "beat"}
+                ],
+            }
+        )
     )
 
 
@@ -518,26 +537,13 @@ def test_the_concat_list_does_not_survive_the_run(tmp_path):
 def test_the_command_writes_every_artifact_separately(index, repo, tmp_path, monkeypatch):
     """Beats, script, timings and audio are four files because they have four
     different costs. Re-voicing should never mean re-writing."""
-    plan_path = tmp_path / "beats.json"
     doc = _doc(index, _section(index))
     source = tmp_path / "doc.json"
     doc.write(source)
 
     out = tmp_path / "audio"
     out.mkdir()
-    (out / "beats.json").write_text(beats_to_json(_plan(_beat())))
-    (out / "narration.json").write_text(
-        json.dumps(
-            {
-                "title": "T", "question": "", "base_sha": "abc",
-                "segments": [
-                    {"id": "n000", "section_id": "s1", "beat_order": 0,
-                     "text": "The delay doubles.", "confidence": "derived",
-                     "kind": "structure", "role": "beat"}
-                ],
-            }
-        )
-    )
+    _seed(out, doc)
     from kreb.cli import main
 
     code = main(
@@ -548,7 +554,6 @@ def test_the_command_writes_every_artifact_separately(index, repo, tmp_path, mon
     assert (out / "script.txt").exists()
     assert (out / "timings.json").exists()
     assert (out / "narration.wav").exists()
-    assert not plan_path.exists()
 
 
 def test_the_command_keeps_the_writing_when_there_is_no_voice(
@@ -560,19 +565,7 @@ def test_the_command_keeps_the_writing_when_there_is_no_voice(
     doc.write(source)
     out = tmp_path / "audio"
     out.mkdir()
-    (out / "beats.json").write_text(beats_to_json(_plan(_beat())))
-    (out / "narration.json").write_text(
-        json.dumps(
-            {
-                "title": "T", "question": "", "base_sha": "abc",
-                "segments": [
-                    {"id": "n000", "section_id": "s1", "beat_order": 0,
-                     "text": "The delay doubles.", "confidence": "derived",
-                     "kind": "structure", "role": "beat"}
-                ],
-            }
-        )
-    )
+    _seed(out, doc)
     from kreb.cli import main
 
     code = main(
@@ -603,3 +596,116 @@ def test_a_ratio_outside_parentheses_is_spoken_as_words(index, repo):
     from kreb.render.narration import _for_the_ear
 
     assert _for_the_ear("3/4 of files were skipped.") == "3 of 4 of files were skipped."
+
+
+# -- reuse must be keyed on identity, not existence -------------------------
+
+
+def test_a_plan_knows_which_document_it_came_from(index, repo):
+    doc_a = _doc(index, _section(index, body="First."))
+    doc_b = _doc(index, _section(index, body="Second."))
+    provider = ScriptedProvider(_beats(("s1", "The delay doubles.")))
+    plan = plan_beats(doc_a, index, _metered(provider)).plan
+    assert plan.matches(doc_a) is True
+    assert plan.matches(doc_b) is False
+
+
+def test_a_plan_without_a_digest_is_treated_as_a_mismatch(index, repo):
+    """Regenerating costs a few cents; narrating the wrong document costs the
+    whole artifact."""
+    doc = _doc(index, _section(index))
+    assert _plan(_beat()).matches(doc) is False
+
+
+@has_ffmpeg
+def test_narrating_a_second_document_does_not_replay_the_first(
+    index, repo, tmp_path, capsys
+):
+    """`--out` defaults to one fixed path, so reuse keyed on file existence
+    means the second document silently gets the first one's beats."""
+    from kreb.cli import main
+
+    doc_a = _doc(index, _section(index, body="First document."))
+    doc_b = _doc(index, _section(index, body="A different document entirely."))
+    out = tmp_path / "audio"
+    out.mkdir()
+
+    stale = _plan(_beat(point="From the first document."))
+    stale.doc_digest = "0" * 16
+    (out / "beats.json").write_text(beats_to_json(stale))
+    (out / "narration.json").write_text(
+        json.dumps(
+            {
+                "title": "T", "question": "", "base_sha": "abc",
+                "segments": [
+                    {"id": "n000", "section_id": "s1", "beat_order": 0,
+                     "text": "From the first document.", "confidence": "derived",
+                     "kind": "structure", "role": "beat"}
+                ],
+            }
+        )
+    )
+    source = tmp_path / "b.json"
+    doc_b.write(source)
+
+    # No API key in the test environment, so the rewrite path bails at the key
+    # check — which is itself the proof it refused to reuse.
+    code = main(
+        ["--repo", str(repo.root), "audio", str(source),
+         "--out", str(out), "--voice", "silence"]
+    )
+    err = capsys.readouterr().err
+    assert "different document" in err
+    assert code != 0
+    assert "From the first document." not in (out / "script.txt").read_text(
+    ) if (out / "script.txt").exists() else True
+
+
+# -- a dropped segment is not a success -------------------------------------
+
+
+@has_ffmpeg
+def test_a_dropped_segment_makes_the_run_incomplete(tmp_path):
+    """`beats` enforces that every section gets a beat; a segment lost at
+    synthesis undoes that one layer down, and the file still plays."""
+
+    class HalfBrokenEngine(SilenceEngine):
+        def speak(self, text, out):
+            if "second" in text:
+                return Spoken(path=None, reason="synthetic failure")
+            return super().speak(text, out)
+
+    narration = Narration(
+        title="T", question="", base_sha="abc",
+        segments=(
+            Segment(id="n000", section_id="s1", beat_order=0, text="The first line.",
+                    confidence="derived", kind="structure"),
+            Segment(id="n001", section_id="s2", beat_order=1, text="The second line.",
+                    confidence="derived", kind="structure"),
+        ),
+    )
+    result = build_audio(
+        narration, HalfBrokenEngine(), out=tmp_path / "a.wav", cache_dir=tmp_path / "c"
+    )
+    assert result.ok is True       # the file exists and plays
+    assert result.complete is False  # and is missing a section
+    assert "1 of 2 segments" in result.reason
+    payload = json.loads(timings_json(result))
+    assert payload["complete"] is False
+    assert payload["failures"]
+
+
+# -- the hedge check must not be defeatable by spelling ---------------------
+
+
+def test_a_word_merely_containing_a_hedge_is_not_a_hedge():
+    """"The mighty parser" contains "might". Substring matching would pass it
+    as hedged, which is the rule quietly ceasing to be a rule."""
+    assert has_hedge("The mighty parser handles this.") is False
+    assert has_hedge("Dismay is not a hedge.") is False
+    assert has_hedge("It might be the parser.") is True
+
+
+def test_a_hedge_at_the_end_of_a_sentence_still_counts():
+    assert has_hedge("The parser handles it, or so it may.") is True
+    assert has_hedge("Retries are capped, it seems.") is True

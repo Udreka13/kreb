@@ -297,6 +297,21 @@ Recorded so they are not relitigated:
 - **A missing voice must not cost you the writing.** `kreb audio` still writes
   beats, script and an estimated timeline, names what is missing, and exits 1.
   `--json` returns the same exit code as the human path.
+- **Artifact reuse is keyed on identity, never on a file existing.** A beats
+  plan carries a digest of the document it was built from, and `--out` defaults
+  to one fixed path, so existence-based reuse means narrating your second
+  document replays the first one's beats. A plan with no digest counts as a
+  mismatch: regenerating costs cents, narrating the wrong document costs the
+  artifact.
+- **`ok` and `complete` are different questions.** A file that plays cleanly and
+  is missing one section is not a success. `beats` requires every section to get
+  a beat; a segment dropped at synthesis undoes that a layer down, so callers
+  exit on `complete` and the dropped segments are named in `--json`.
+- **Beats and narration are plain files under `.kreb/audio/`, not store nodes.**
+  Every other generated node goes through `GeneratedKey` /
+  `materialize_generated`. The digest guard closes the practical hole; moving
+  them into the store is a later cleanup, recorded so it is not mistaken for an
+  oversight.
 - **Duration is measured with `ffprobe`, never estimated from word count.**
   Downstream, `scene_len = max(audio_len, min_duration)`; a duration wrong by a
   second is a caption that outlives its scene.

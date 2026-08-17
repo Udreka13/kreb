@@ -62,7 +62,20 @@ class AudioResult:
 
     @property
     def ok(self) -> bool:
+        """There is an audio file. Not the same as it being the whole document."""
         return self.path is not None
+
+    @property
+    def complete(self) -> bool:
+        """Every segment made it in.
+
+        The distinction is load-bearing. `beats` enforces that every section
+        gets a beat, and a segment silently dropped at synthesis time undoes
+        that rule one layer down: you get a file that plays cleanly and is
+        missing a section, which is the exact failure the coverage rule exists
+        to prevent. Callers exit on this, not on `ok`.
+        """
+        return self.ok and not self.failures
 
     @property
     def seconds(self) -> float:
@@ -174,6 +187,13 @@ def build_audio(
         result.reason = detail
         return result
     result.path = out
+    if result.failures:
+        # Say it here rather than leaving it to the caller: a partial file that
+        # plays cleanly gives a listener no signal that anything is missing.
+        result.reason = (
+            f"{len(result.failures)} of {len(narration.segments)} segments "
+            "could not be synthesized and are missing from the audio"
+        )
     return result
 
 
@@ -247,6 +267,8 @@ def timings_json(result: AudioResult) -> str:
             "audio": str(result.path) if result.path else None,
             "seconds": round(result.seconds, 3),
             "estimated": result.estimated,
+            "complete": result.complete,
+            "failures": list(result.failures),
             "reason": result.reason,
             "segments": [
                 {

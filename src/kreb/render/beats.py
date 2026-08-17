@@ -27,6 +27,7 @@ smoother, and missing the part you wanted.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -79,6 +80,18 @@ class Beat:
         return self.kind == "background"
 
 
+def document_digest(document: Document) -> str:
+    """A fingerprint of the exact document a plan was built from.
+
+    `base_sha` is not enough and neither is the title: three documents answering
+    three questions about one repository share a commit, and a title is a string
+    a caller can pass with `--title`. Reuse keyed on anything weaker than the
+    document's own content is how `kreb audio` on your second document narrates
+    the first one's beats.
+    """
+    return hashlib.sha256(document.to_json().encode("utf-8")).hexdigest()[:16]
+
+
 @dataclass
 class BeatsPlan:
     """An ordered plan, with the document it was built from."""
@@ -87,6 +100,16 @@ class BeatsPlan:
     question: str
     base_sha: str
     beats: tuple[Beat, ...] = ()
+    doc_digest: str = ""
+
+    def matches(self, document: Document) -> bool:
+        """Whether this plan was built from exactly this document.
+
+        An empty digest is a plan written before digests existed; treat it as a
+        mismatch rather than a match, because regenerating costs a few cents and
+        narrating the wrong document costs the whole artifact.
+        """
+        return bool(self.doc_digest) and self.doc_digest == document_digest(document)
 
     def for_section(self, section_id: str) -> tuple[Beat, ...]:
         return tuple(b for b in self.beats if b.section_id == section_id)
@@ -357,6 +380,7 @@ def _evaluate(
             question=document.question,
             base_sha=document.capabilities.base_sha,
             beats=tuple(beats),
+            doc_digest=document_digest(document),
         ),
         [],
     )
@@ -374,6 +398,7 @@ def to_json(plan: BeatsPlan) -> str:
             "title": plan.title,
             "question": plan.question,
             "base_sha": plan.base_sha,
+            "doc_digest": plan.doc_digest,
             "beats": [
                 {
                     "section_id": b.section_id,
@@ -398,6 +423,7 @@ def from_json(text: str) -> BeatsPlan:
         title=data["title"],
         question=data.get("question", ""),
         base_sha=data.get("base_sha", ""),
+        doc_digest=data.get("doc_digest", ""),
         beats=tuple(
             Beat(
                 section_id=b["section_id"],
