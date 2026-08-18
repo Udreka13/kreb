@@ -30,6 +30,7 @@ from kreb.media import check_tools, duration_of, run_ffmpeg
 from kreb.progress import Progress
 from kreb.render.narration import Narration, Segment
 from kreb.tts.base import SpeechEngine
+from kreb.tts.cast import Cast, as_cast
 
 
 @dataclass(frozen=True)
@@ -115,37 +116,39 @@ def segment_key(segment: Segment, engine: SpeechEngine) -> str:
 
 def build_audio(
     narration: Narration,
-    engine: SpeechEngine,
+    engine: SpeechEngine | Cast,
     *,
     out: Path,
     cache_dir: Path,
     progress: Progress | None = None,
 ) -> AudioResult:
     """Synthesize every segment, join them, and measure the result."""
-    state = engine.check()
+    cast = as_cast(engine)
+    state = cast.check()
     if not state:
         return AudioResult(
-            timings=_estimated_timeline(narration, engine),
-            engine=engine.identity,
+            timings=_estimated_timeline(narration, cast.default),
+            engine=cast.identity,
             reason=state.reason,
         )
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    result = AudioResult(engine=engine.identity)
+    result = AudioResult(engine=cast.identity)
     pieces: list[Path] = []
     timings: list[SegmentTiming] = []
     cursor = 0.0
 
     total = len(narration.segments)
     for position, segment in enumerate(narration.segments, start=1):
-        path = cache_dir / f"{segment_key(segment, engine)}.wav"
+        voice = cast.for_speaker(segment.speaker)
+        path = cache_dir / f"{segment_key(segment, voice)}.wav"
         cached = path.exists() and path.stat().st_size > 0
         spoken_seconds: float | None = None
         generation_id = ""
         if cached:
             result.reused += 1
         else:
-            spoken = engine.speak(segment.text, path)
+            spoken = voice.speak(segment.text, path)
             if not spoken.ok:
                 result.failures.append(f"{segment.id}: {spoken.reason}")
                 if progress is not None:

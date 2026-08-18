@@ -613,7 +613,7 @@ def test_the_command_writes_every_artifact_separately(index, repo, tmp_path, mon
 
     code = main(
         ["--repo", str(repo.root), "--json", "audio", str(source),
-         "--out", str(out), "--voice", "silence"]
+         "--out", str(out), "--voice", "silence", "--style", "monologue"]
     )
     assert code == 0
     assert (out / "script.txt").exists()
@@ -635,7 +635,8 @@ def test_the_command_keeps_the_writing_when_there_is_no_voice(
 
     code = main(
         ["--repo", str(repo.root), "--json", "audio", str(source),
-         "--out", str(out), "--voice", str(tmp_path / "missing.onnx")]
+         "--out", str(out), "--voice", str(tmp_path / "missing.onnx"),
+         "--style", "monologue"]
     )
     payload = json.loads(capsys.readouterr().out)
     assert code == 1  # scriptable: no audio is a mechanical failure
@@ -717,7 +718,7 @@ def test_narrating_a_second_document_does_not_replay_the_first(
     # check — which is itself the proof it refused to reuse.
     code = main(
         ["--repo", str(repo.root), "audio", str(source),
-         "--out", str(out), "--voice", "silence"]
+         "--out", str(out), "--voice", "silence", "--style", "monologue"]
     )
     err = capsys.readouterr().err
     assert "different document" in err

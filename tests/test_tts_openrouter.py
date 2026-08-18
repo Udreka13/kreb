@@ -334,7 +334,14 @@ def test_the_command_defaults_to_the_same_voice_the_engine_does():
 
 
 def _args(voice: str, **extra) -> Namespace:
-    return Namespace(voice=voice, voice_name=extra.get("voice_name", ""), speed=extra.get("speed", 1.0))
+    return Namespace(
+        voice=voice,
+        voice_name=extra.get("voice_name", ""),
+        speed=extra.get("speed", 1.0),
+        style=extra.get("style", "monologue"),
+        host_voice=extra.get("host_voice", ""),
+        host_voice_name=extra.get("host_voice_name", ""),
+    )
 
 
 def test_silence_selects_the_placeholder_engine():

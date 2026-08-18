@@ -44,7 +44,7 @@ until they are green.
 | 11 | `progress/` event stream | **done** | 22 tests; stderr only, MCP-shaped |
 | 12 | `doc/gate_b` + worksheet | **done** | 23 tests; builds the sheet, scores nothing |
 | — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
-| 13 | `render/beats` + `render/narration` + `tts/` + audio | **done** | 71 tests; three voices: silence, piper, hosted |
+| 13 | `render/beats` + `render/narration` + `render/dialogue` + `tts/` + audio | **done** | 99 tests; two-host by default |
 | 14 | `render/storyboard` + video | pending | consumes `beats` + `timings` |
 | 15 | `mcp/` | pending | deferred deliberately |
 
@@ -294,6 +294,28 @@ Recorded so they are not relitigated:
   artifact are buildable and checkable on a machine with no TTS at all — which
   is most machines. Every timing it produces is flagged `estimated`, so a
   word-count estimate can never be mistaken for a measurement.
+- **Two hosts, not one narrator, and that is the default.** A monologue that
+  obeys the self-containment rule reads as a well-ordered *list* — eighteen true
+  statements in a row is a reference, not something you follow while doing the
+  dishes. A host who asks the question the listener is forming supplies the
+  connective tissue the monologue is forbidden from having, without the expert's
+  lines losing the independence the video renderer needs, because the question is
+  a separate turn. `--style monologue` keeps the old shape.
+- **The host may only ask, and that is checked lexically.** A host turn must end
+  in a question mark, is capped at one sentence, is held to the beat's symbol
+  allowlist, and cannot exist in the JSON without the expert turn it introduces.
+  A second speaker is a second mouth that can make claims nobody checked; the
+  question-mark rule is the whole thing standing between the host and an
+  unanchored assertion — enforceable for the same reason the hedge rule is, and
+  the one-sentence cap exists because a two-sentence question is how an
+  assertion rides in ahead of the question mark.
+- **`Cast` is itself a `SpeechEngine`, so one voice is a cast of one.** There is
+  no second path through synthesis: same loop, same cache, same measurement,
+  whether one person is talking or two. Its identity names every voice, so
+  recasting invalidates the cache rather than serving back the old host.
+- **A dialogue that cannot be split says so.** Silence has no timbre and piper
+  needs a second model file, so neither can be re-voiced by name. Collapsing
+  quietly would leave someone reading a two-speaker transcript and hearing one.
 - **The default voice is hosted and free.** `deepgram/flux-tts:free` on the
   OpenRouter key the project already uses — priced "0" on both prompt and
   completion, so the cost of `kreb audio` is exactly zero and needs no lookup.
@@ -374,7 +396,15 @@ Carried from research; none blocks the build, all bear on whether it is worth it
    and unexercised by the corpus. A document that hedges nothing is either a
    confident document or a broken confidence signal, and that is worth knowing.
 
-6. **The hosted voice has never made a real request.** Built against the
+6. **Does the host actually ask what a listener would wonder?** The rules
+   guarantee the host asks *something* — a question mark, one sentence, no stray
+   symbols. None of that guarantees the question is a good one, and "asks what a
+   listener is thinking" is exactly the kind of negative semantic property this
+   project holds to be unenforceable. Nothing catches a metronome of "and what
+   about that?" beyond the prompt asking for better. Judge it on the first real
+   run, alongside Gate B.
+
+7. **The hosted voice has never made a real request.** Built against the
    documented contract and the model listing, exercised end-to-end against real
    mp3 bytes through the real decode path, and never once called. Three things
    are unknown and only one keyed run answers all of them: whether

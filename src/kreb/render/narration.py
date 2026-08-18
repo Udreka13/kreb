@@ -103,6 +103,11 @@ class Segment:
     confidence: Confidence
     kind: SectionKind
     role: str = "beat"
+    speaker: str = "narrator"
+    """Who says this line. One value for the monologue renderer, two for the
+    dialogue one. It is part of the TTS cache key by way of the voice it selects,
+    so a segment reassigned to the other host re-synthesizes rather than keeping
+    the first host's timbre."""
 
     @property
     def sentences(self) -> list[str]:
@@ -442,6 +447,7 @@ def to_json(narration: Narration) -> str:
                     "confidence": s.confidence,
                     "kind": s.kind,
                     "role": s.role,
+                    "speaker": s.speaker,
                 }
                 for s in narration.segments
             ],
@@ -465,6 +471,7 @@ def from_json(text: str) -> Narration:
                 confidence=s.get("confidence", "derived"),
                 kind=s.get("kind", "structure"),
                 role=s.get("role", "beat"),
+                speaker=s.get("speaker", "narrator"),
             )
             for i, s in enumerate(data.get("segments", ()))
         ),

@@ -218,21 +218,67 @@ def engine_for(args):
     "a model id I have not heard of" gets one of them wrong, and both failures
     surface much later as a network error about a path.
     """
+    from kreb.tts.cast import Cast
+
+    expert = _one_engine(
+        (args.voice or "").strip(),
+        name=getattr(args, "voice_name", "") or "",
+        speed=getattr(args, "speed", 1.0) or 1.0,
+    )
+    if args.style != "dialogue":
+        return expert
+
+    host = _host_voice(args, expert)
+    if host is None:
+        # Said out loud rather than silently collapsing. The transcript will
+        # still read as a conversation, so someone who only glances at
+        # script.txt would have no way to know both parts came out in one
+        # timbre — which is the whole point of having two.
+        print(
+            "note: no distinct host voice, so one voice reads both parts. "
+            "Pass --host-voice-name (hosted voices) or --host-voice.",
+            file=sys.stderr,
+        )
+        return expert
+    return Cast(default=expert, voices={"expert": expert, "host": host})
+
+
+def _host_voice(args, expert):
+    """A voice for the host, or None if no distinct one can be made.
+
+    An explicit `--host-voice` is any of the three forms. Otherwise a hosted
+    expert can be re-voiced by name within the same model, which is the cheap
+    path — one flag, one model, two timbres. Piper would need a second model
+    file and silence has no timbre at all, so neither can be split this way.
+    """
+    from dataclasses import replace as _replace
+
+    from kreb.tts.openrouter import OpenRouterVoice
+
+    if args.host_voice:
+        return _one_engine(
+            args.host_voice.strip(),
+            name=getattr(args, "host_voice_name", "") or "",
+            speed=getattr(args, "speed", 1.0) or 1.0,
+        )
+    name = (getattr(args, "host_voice_name", "") or "").strip()
+    if isinstance(expert, OpenRouterVoice) and name and name != expert.voice:
+        return _replace(expert, voice=name)
+    return None
+
+
+def _one_engine(voice: str, *, name: str = "", speed: float = 1.0):
+    """One engine from one `--voice`-shaped string."""
     from kreb.tts.openrouter import OpenRouterVoice
     from kreb.tts.piper import PiperEngine
     from kreb.tts.silence import SilenceEngine
 
-    voice = (args.voice or "").strip()
     if voice == "silence":
         return SilenceEngine()
     if voice.endswith(".onnx"):
         return PiperEngine(voice=Path(voice))
     if "/" in voice:
-        return OpenRouterVoice(
-            model=voice,
-            voice=getattr(args, "voice_name", "") or "",
-            speed=getattr(args, "speed", 1.0) or 1.0,
-        )
+        return OpenRouterVoice(model=voice, voice=name, speed=speed)
     raise ValueError(
         f"--voice {voice!r} is none of the three forms: `silence`, a path ending "
         "in .onnx (piper), or an OpenRouter model id containing a slash "
@@ -260,6 +306,7 @@ def cmd_audio(args) -> int:
     from kreb.provider.metered import MeteredProvider
     from kreb.provider.openrouter import OpenRouterProvider
     from kreb.render import beats as beats_mod
+    from kreb.render import dialogue as dialogue_mod
     from kreb.render import narration as narration_mod
     from kreb.render.audio import build_audio, timings_json
 
@@ -299,9 +346,25 @@ def cmd_audio(args) -> int:
             )
             cached_plan = None
 
+    cached_narration = None
     if cached_plan is not None:
+        cached_narration = narration_mod.from_json(narration_path.read_text(encoding="utf-8"))
+        # A script written as a monologue cannot be replayed as a dialogue, and
+        # reusing it anyway would make `--style dialogue` a flag that silently
+        # does nothing on the second run.
+        was_dialogue = any(s.speaker != "narrator" for s in cached_narration.segments)
+        if was_dialogue != (args.style == "dialogue"):
+            print(
+                f"{narration_path} was written as a "
+                f"{'dialogue' if was_dialogue else 'monologue'}; "
+                f"rewriting it as a {args.style}",
+                file=sys.stderr,
+            )
+            cached_plan = cached_narration = None
+
+    if cached_narration is not None:
         plan = cached_plan
-        narration = narration_mod.from_json(narration_path.read_text(encoding="utf-8"))
+        narration = cached_narration
         spent = 0.0
     else:
         try:
@@ -329,9 +392,12 @@ def cmd_audio(args) -> int:
         beats_path.write_text(beats_mod.to_json(plan), encoding="utf-8")
 
         progress.emit("narration_started", "writing the script", total=len(plan.beats))
-        written = narration_mod.write_narration(
-            plan, index, provider, document=doc, progress=progress
+        write = (
+            dialogue_mod.write_dialogue
+            if args.style == "dialogue"
+            else narration_mod.write_narration
         )
+        written = write(plan, index, provider, document=doc, progress=progress)
         if not written.ok:
             print("could not write narration:", file=sys.stderr)
             for reason in written.rejections[-4:]:
@@ -341,7 +407,12 @@ def cmd_audio(args) -> int:
         narration_path.write_text(narration_mod.to_json(narration), encoding="utf-8")
         spent = planned.cost + written.cost
 
-    (out_dir / "script.txt").write_text(narration.script + "\n", encoding="utf-8")
+    script = (
+        dialogue_mod.transcript(narration)
+        if any(s.speaker != "narrator" for s in narration.segments)
+        else narration.script
+    )
+    (out_dir / "script.txt").write_text(script + "\n", encoding="utf-8")
 
     result = build_audio(
         narration,
@@ -722,6 +793,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_audio.add_argument(
         "--speed", type=float, default=1.0, help="hosted speaking rate, 1.0 is normal"
+    )
+    p_audio.add_argument(
+        "--style",
+        default="dialogue",
+        choices=["dialogue", "monologue"],
+        help=(
+            "dialogue: a host asks and an expert answers, two voices. "
+            "monologue: one narrator"
+        ),
+    )
+    p_audio.add_argument(
+        "--host-voice-name",
+        default="",
+        help="the host's voice within the same hosted model; the cheap way to get two timbres",
+    )
+    p_audio.add_argument(
+        "--host-voice",
+        default="",
+        help="a wholly separate engine for the host, in the same three forms as --voice",
     )
     p_audio.add_argument("--profile", default="balanced", choices=["budget", "balanced", "max"])
     p_audio.add_argument("--max-cost", type=float, default=None)
