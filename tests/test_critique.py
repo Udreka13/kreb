@@ -52,7 +52,7 @@ SCRIPT = _narration("What happens on a retry?", "The delay doubles each time.")
 
 def _verdict(**over):
     payload = {
-        "scores": {"natural": 4, "coherent": 4, "setup": 4, "substance": 4},
+        "scores": {"natural": 4, "coherent": 4, "listenable": 4},
         "findings": [],
         "summary": "Holds together.",
     }
@@ -70,7 +70,7 @@ def _judge(narration, payload):
 def test_a_score_is_the_mean_across_axes():
     """A mean rather than a minimum: one weak axis on an otherwise good script
     is a note, not a verdict."""
-    result = _judge(SCRIPT, _verdict(scores={"natural": 5, "coherent": 4, "setup": 3, "substance": 4}))
+    result = _judge(SCRIPT, _verdict(scores={"natural": 5, "coherent": 4, "listenable": 3}))
     assert result.ok
     assert result.score == 4.0
 
@@ -78,9 +78,9 @@ def test_a_score_is_the_mean_across_axes():
 def test_every_axis_is_kept_alongside_the_mean():
     """Averaging hides exactly the thing worth seeing — a script that is
     coherent and lifeless scores the same as one that is neither."""
-    result = _judge(SCRIPT, _verdict(scores={"natural": 1, "coherent": 5, "setup": 5, "substance": 5}))
+    result = _judge(SCRIPT, _verdict(scores={"natural": 1, "coherent": 5, "listenable": 3}))
     assert result.scores["natural"] == 1
-    assert result.score == 4.0
+    assert result.score == 3.0
 
 
 def test_an_unknown_axis_is_ignored():
@@ -91,7 +91,7 @@ def test_an_unknown_axis_is_ignored():
 def test_a_score_outside_the_scale_is_clamped():
     """A judge that returns 9 has not understood the scale, and letting it
     through would make one run incomparable with every other."""
-    result = _judge(SCRIPT, _verdict(scores={"natural": 9, "coherent": 0, "setup": 3, "substance": 3}))
+    result = _judge(SCRIPT, _verdict(scores={"natural": 9, "coherent": 0, "listenable": 3}))
     assert result.scores["natural"] == 5
     assert result.scores["coherent"] == 1
 
@@ -99,13 +99,25 @@ def test_a_score_outside_the_scale_is_clamped():
 def test_a_low_score_is_reported_not_enforced():
     """The whole design decision. A bad script still produces audio; the number
     is a signal to a person, not a gate on the pipeline."""
-    result = _judge(SCRIPT, _verdict(scores={"natural": 1, "coherent": 1, "setup": 1, "substance": 1}))
+    result = _judge(SCRIPT, _verdict(scores={"natural": 1, "coherent": 1, "listenable": 1}))
     assert result.ok
     assert not result.good_enough
     assert result.score < GOOD_ENOUGH
 
 
 # -- the judge is a model, not an oracle ------------------------------------
+
+
+def test_hesitation_is_not_something_the_judge_marks_down():
+    """The judge has to agree with the writer about what good audio is. Scoring
+    "substance" penalized filler, and filler is what keeps a conversation moving
+    out loud — the judge would have pulled the script back toward the stilted
+    thing the prompt stopped asking for."""
+    from kreb.render.critique import CRITIQUE_SYSTEM
+
+    assert "do not mark them down" in CRITIQUE_SYSTEM
+    assert "sound human" in CRITIQUE_SYSTEM
+    assert "substance" not in {name for name, _ in AXES}
 
 
 def test_a_finding_that_quotes_nothing_is_dropped():

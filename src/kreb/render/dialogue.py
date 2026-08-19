@@ -29,10 +29,16 @@ allowlist* as the expert — set containment against the index, not a judgement
 about tone. A host naming a symbol the section never cited is a fabricated
 anchor with a question mark after it, and it stays rejected.
 
-The expert carries every rule the monologue narrator carried: sentence cap,
+The expert carries the rules that are about truth rather than taste:
 hedge-when-speculative, symbol allowlist, background signpost prepended. One
 expert turn per beat, still mandatory, so the coverage invariant `beats`
 enforces survives the second renderer.
+
+The sentence cap is not a rule here, it is a *cut*. A segment is the TTS cache
+unit and the video scene unit, so it has to stay short — but a long stretch where
+the expert just runs with it is one of the things that makes audio sound like a
+person. So a long turn is split into scene-sized segments rather than rejected.
+The words are the model's; the segmentation is ours.
 
 Coherence — does this sound like two people talking, does the question actually
 set up the answer — is judged in `render/critique.py` and *reported*, never fed
@@ -93,42 +99,33 @@ class DialogueDraft(BaseModel):
 
 
 DIALOGUE_SYSTEM = """\
-You are writing a conversation between two people about a codebase, to be heard
-rather than read. Write it the way people actually talk.
+Write a podcast conversation about a codebase. Two people: a host who wants to
+understand it, and an expert who has read it.
 
-THE HOST has not read the code and is genuinely curious. The host says what a
-listener is thinking: asks the obvious question, pushes back when something
-sounds too neat, says "wait, why would you do that" when it is warranted, and
-sometimes just reacts — "huh", "that's the opposite of what I expected" — before
-asking anything. The host is allowed to be skeptical and allowed to be wrong.
+Make it sound like a real recording. People hesitate, repeat themselves, start
+over, trail off, laugh, warm up before getting to the point, say "right, right"
+while they think. Turns are uneven — sometimes one word, sometimes a long
+stretch where the expert just runs with it. None of that reads well on a page
+and all of it is what makes audio sound like people rather than an announcement.
 
-THE EXPERT has read the code and says what is actually there. Two sentences at
-most, one is often better. Answer the question that was asked, not a nearby one.
+Two things are not yours to invent:
 
-What makes this sound like people rather than a quiz:
-- The host does not ask a question every time. Sometimes the expert just keeps
-  going, and the host comes back in a couple of beats later. A question on every
-  beat is a metronome and it is instantly recognizable as machine-written.
-- Vary the shape. Not every host turn is an interrogative — "So that's why the
-  hashes are split." is a real thing a person says, and the expert can answer it.
-- Let the host's turn set up the answer that follows. A question the answer does
-  not address is worse than no question.
-- No filler that means nothing. "Great question" and "That's fascinating" are
-  what this fails as. React to the substance or say nothing.
+Facts about the code come from the beats below and nowhere else. If a beat does
+not say it, neither does the expert.
 
-Both speakers:
-- Name only symbols the beat itself names. Adding one is a claim nobody checked,
-  and it applies to the host too — a question naming an invented function is
-  still an invention.
-- Speak names plainly — "the retry policy", not `RetryPolicy` spelled out.
-- No markdown, no backticks, no bullets, no headings. This is speech.
+Nothing outside this room. No weather, no news, no "I was reading something this
+morning" — you cannot check any of it, and a fabricated anecdote is a
+fabrication however charming it is. Small talk that claims nothing is fine.
 
-Where a beat is marked HEDGE REQUIRED, the expert's line must sound uncertain
-out loud — "probably", "likely", "appears to", "may", "seems". Uncertainty a
-listener cannot hear is not uncertainty. Hedge in the answer, not the question.
+Say names the way you would out loud, and use no markdown — this is speech, not
+a page.
+
+Where a beat says HEDGE REQUIRED, the expert has to sound unsure out loud:
+"probably", "likely", "seems", "may". Doubt a listener cannot hear is not doubt.
 
 Return JSON: {"turns": [{"order": <beat order>, "host": "...", "expert": "..."}]}
-Omit "host" or leave it empty on beats where the expert simply continues.
+Every beat needs its expert turn. "host" is optional — leave it out when the
+expert simply keeps going.
 """
 
 
@@ -262,14 +259,6 @@ def _evaluate(
                 failures.append(problem)
                 continue
 
-        count = len(split_sentences(answer))
-        if count > MAX_SENTENCES:
-            failures.append(
-                f"beat {beat.order}: the expert takes {count} sentences; at most "
-                f"{MAX_SENTENCES}, because one turn is one scene"
-            )
-            continue
-
         if beat.hedge_required and not has_hedge(answer):
             failures.append(
                 f"beat {beat.order} comes from a speculative section but the expert "
@@ -294,28 +283,17 @@ def _evaluate(
             answer = f"{BACKGROUND_PREFIX} {answer[0].lower() + answer[1:]}"
 
         if question:
+            # Not split. A host turn is short by nature — "Wait, hang on. Not
+            # even a little?" is three sentences and one breath, and cutting it
+            # puts a scene boundary inside a single thought. The cap exists for
+            # the expert's long stretches; applying it here buys nothing and
+            # costs the delivery.
             segments.append(
-                Segment(
-                    id=f"n{beat.order:03d}q",
-                    section_id=beat.section_id,
-                    beat_order=beat.order,
-                    text=question,
-                    confidence=beat.confidence,
-                    kind=beat.kind,
-                    role="question",
-                    speaker=HOST,
-                )
+                _segment(question, beat, id=f"n{beat.order:03d}q", role="question",
+                         speaker=HOST)
             )
-        segments.append(
-            Segment(
-                id=f"n{beat.order:03d}",
-                section_id=beat.section_id,
-                beat_order=beat.order,
-                text=answer,
-                confidence=beat.confidence,
-                kind=beat.kind,
-                speaker=EXPERT,
-            )
+        segments.extend(
+            _split(answer, beat, prefix=f"n{beat.order:03d}", role="beat", speaker=EXPERT)
         )
 
     if failures:
@@ -329,6 +307,45 @@ def _evaluate(
             segments=tuple(_opening(plan) + segments + _closing(document)),
         ),
         [],
+    )
+
+
+def _split(text: str, beat, *, prefix: str, role: str, speaker: str) -> list[Segment]:
+    """One turn, cut into scene-sized segments.
+
+    A segment is the TTS cache unit and, once the video renderer exists, the
+    scene unit — which is why `MAX_SENTENCES` exists at all. But a long stretch
+    where the expert simply runs with it is one of the things that makes audio
+    sound like a person, so rejecting the turn would be enforcing a video
+    constraint on the writing.
+
+    Splitting satisfies both. The words are the model's; the segmentation is
+    ours. It also keeps the cache honest — editing the tail of a long answer
+    re-synthesizes the tail rather than the whole turn.
+    """
+    sentences = split_sentences(text)
+    if len(sentences) <= MAX_SENTENCES:
+        return [_segment(text, beat, id=prefix, role=role, speaker=speaker)]
+    chunks = [
+        " ".join(sentences[i : i + MAX_SENTENCES])
+        for i in range(0, len(sentences), MAX_SENTENCES)
+    ]
+    return [
+        _segment(chunk, beat, id=f"{prefix}-{i}", role=role, speaker=speaker)
+        for i, chunk in enumerate(chunks)
+    ]
+
+
+def _segment(text: str, beat, *, id: str, role: str, speaker: str) -> Segment:
+    return Segment(
+        id=id,
+        section_id=beat.section_id,
+        beat_order=beat.order,
+        text=text,
+        confidence=beat.confidence,
+        kind=beat.kind,
+        role=role,
+        speaker=speaker,
     )
 
 

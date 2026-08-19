@@ -48,10 +48,9 @@ _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 # What gets judged. Each is a question about the script as heard, and each is
 # one a listener could answer — which is the test for whether it belongs here.
 AXES: tuple[tuple[str, str], ...] = (
-    ("natural", "Does this sound like two people talking, or like a quiz?"),
+    ("natural", "Does this sound like a real recording of two people?"),
     ("coherent", "Does each turn follow from the one before it?"),
-    ("setup", "Does each host turn set up the answer that actually follows?"),
-    ("substance", "Does every turn carry weight, or is some of it filler?"),
+    ("listenable", "Would you keep listening, heard once, without the page?"),
 )
 
 # Below this, the script is worth rewriting. Chosen as "clearly mediocre" rather
@@ -116,14 +115,16 @@ aloud, once, by someone who cannot scroll back.
 Score each of these 1 to 5, where 3 is "fine, unremarkable" and 5 is "I would
 not have guessed this was scripted":
 
-- natural: does this sound like two people talking, or like a quiz?
+- natural: does this sound like a real recording of two people?
 - coherent: does each turn follow from the one before it?
-- setup: does each host turn set up the answer that actually follows it?
-- substance: does every turn carry weight, or is some of it filler?
+- listenable: would you keep listening, heard once, without the page?
 
-Be a hard marker. A script where the host asks a question every single time,
-where questions are interchangeable, or where anyone says "great question" is
-not a 4. Reserve 5 for a conversation you would not skip.
+Judge it as audio, not as prose. Hesitation, repetition, half-finished
+sentences, someone saying "right, right" while they think — those read badly and
+sound human, so do not mark them down. What earns a low score is the opposite:
+turns that alternate like clockwork, questions that are interchangeable,
+everyone speaking in finished paragraphs. Reserve 5 for something you would not
+skip.
 
 Then list what is actually wrong. Every finding must quote the offending line
 exactly as it appears — the quote is checked against the script, and a finding

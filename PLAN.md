@@ -44,7 +44,7 @@ until they are green.
 | 11 | `progress/` event stream | **done** | 22 tests; stderr only, MCP-shaped |
 | 12 | `doc/gate_b` + worksheet | **done** | 23 tests; builds the sheet, scores nothing |
 | — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
-| 13 | `render/beats` + `render/narration` + `render/dialogue` + `render/critique` + `tts/` + audio | **done** | 117 tests; two-host, judged not gated |
+| 13 | `render/beats` + `render/narration` + `render/dialogue` + `render/critique` + `tts/` + audio | **done** | 126 tests; two-host, judged not gated |
 | 14 | `render/storyboard` + video | pending | consumes `beats` + `timings` |
 | 15 | `mcp/` | pending | deferred deliberately |
 
@@ -305,12 +305,30 @@ Recorded so they are not relitigated:
   first version made the host end every turn in a question mark, capped it at one
   sentence, and required at least one question per script. Those are style rules
   dressed as validators and they produce the stilted output they look like they
-  prevent — a metronome of clipped interrogatives. They are gone. What survives
-  is the *symbol allowlist*, which binds the host exactly as it binds the expert:
-  set containment against the index, mechanically true or false. A host naming a
-  symbol its section never cited is a fabricated anchor with a question mark
-  after it. The distinction is the general rule — validate what is checkable,
+  prevent. They are gone. What survives is the *symbol allowlist*, which binds
+  the host exactly as it binds the expert: set containment against the index,
+  mechanically true or false. The general rule — validate what is checkable,
   prompt for what is not.
+- **The prompt asks for a recording, not a document.** Hesitation, repetition,
+  half-finished sentences, "right, right" while someone thinks — all of it reads
+  badly and sounds human, and audio is the target. Instructions against filler
+  were removed: filler keeps a conversation moving out loud. Two things stay
+  off-limits because nothing downstream can catch them — facts that are not in
+  the beats, and an invented world (weather, news, "I was reading this morning").
+  A fabricated anecdote has no anchor and no symbol to check it against, so it is
+  a fabrication however charming. Small talk that claims nothing is fine.
+- **The sentence cap is a cut, not a rule.** A segment is the TTS cache unit and
+  the video scene unit, so it must stay short — but a long stretch where the
+  expert runs with it is one of the things that makes audio sound like a person.
+  So a long expert turn is split into scene-sized segments rather than rejected:
+  the words are the model's, the segmentation is ours. Host turns are never
+  split — "Wait, hang on. Not even a little?" is three sentences and one breath,
+  and cutting it puts a scene boundary inside a single thought.
+- **The judge has to agree with the writer about what good audio is.** Scoring
+  "substance" penalized filler, which would have pulled scripts back toward the
+  stilted thing the prompt stopped asking for. The axes are now natural /
+  coherent / listenable, and the judge is told explicitly not to mark down
+  hesitation and repetition.
 - **Coherence is judged by a model and reported, never fed back.**
   `render/critique.py` scores a script 1–5 on natural / coherent / setup /
   substance and writes `critique.json`. It is deliberately *not* in the retry

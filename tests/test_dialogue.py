@@ -26,6 +26,7 @@ from kreb.media import check_tools
 from kreb.render.audio import build_audio, segment_key
 from kreb.render.beats import Beat, BeatsPlan
 from kreb.render.dialogue import EXPERT, HOST, transcript, write_dialogue
+from kreb.render.narration import MAX_SENTENCES
 from kreb.render.narration import BACKGROUND_PREFIX, from_json, to_json
 from kreb.repo.access import Repository
 from kreb.tts.cast import Cast, as_cast
@@ -199,6 +200,69 @@ def test_a_beat_may_skip_its_question(index, repo):
     assert speakers.count(EXPERT) == 2
 
 
+def test_a_long_expert_turn_is_split_not_rejected(index, repo):
+    """A stretch where the expert just runs with it is one of the things that
+    makes audio sound like a person. The scene cap is a video constraint, so it
+    cuts the turn rather than refusing the writing."""
+    long_answer = (
+        "The delay doubles. It caps at sixty seconds. That keeps a retry storm "
+        "bounded. And the cap is a constant, not a setting."
+    )
+    result = _run(index, _plan(), _turns((0, "How does the backoff work?", long_answer)))
+    assert result.ok
+    assert result.attempts == 1
+    expert = [s for s in _body(result.narration) if s.speaker == EXPERT]
+    assert len(expert) == 2
+    assert all(len(s.sentences) <= MAX_SENTENCES for s in expert)
+    # Nothing the model wrote is lost in the cut.
+    assert " ".join(s.text for s in expert) == long_answer
+
+
+def test_a_host_turn_is_never_split(index, repo):
+    """"Wait, hang on. Not even a little?" is three sentences and one breath.
+    Cutting it puts a scene boundary inside a single thought — the cap is for
+    the expert's long stretches, and here it only costs the delivery."""
+    breath = "Wait, hang on. Nothing? Not even a little?"
+    result = _run(index, _plan(), _turns((0, breath, "Nothing at all.")))
+    assert result.ok
+    hosts = [s for s in _body(result.narration) if s.speaker == HOST]
+    assert len(hosts) == 1
+    assert hosts[0].text == breath
+
+
+def test_a_split_turn_keeps_its_beat_and_confidence(index, repo):
+    """Each piece is still that beat's claim, so it inherits the same tags — a
+    cut that dropped them would launder a speculative line into a flat one."""
+    answer = "It probably doubles. It may cap out. Something like sixty seconds."
+    result = _run(index, _plan(_beat(confidence="speculative")),
+                  _turns((0, "", answer)))
+    assert result.ok
+    expert = [s for s in _body(result.narration) if s.speaker == EXPERT]
+    assert len(expert) == 2
+    assert all(s.confidence == "speculative" for s in expert)
+    assert all(s.beat_order == 0 for s in expert)
+
+
+def test_split_pieces_get_distinct_ids(index, repo):
+    """The id is the TTS cache key. Two pieces sharing one would collapse into a
+    single cached file and drop half the answer."""
+    answer = "One. Two. Three. Four."
+    result = _run(index, _plan(), _turns((0, "", answer)))
+    assert result.ok
+    ids = [s.id for s in _body(result.narration)]
+    assert len(ids) == len(set(ids))
+
+
+def test_hesitation_and_repetition_survive(index, repo):
+    """The point of the whole change. None of this reads well and all of it is
+    what a person actually sounds like."""
+    messy = "Right, right. So — okay, so the delay doubles, doubles each time."
+    result = _run(index, _plan(), _turns((0, "Wait, hang on. Say that again?", messy)))
+    assert result.ok
+    assert result.attempts == 1
+    assert any(s.text == messy for s in _body(result.narration))
+
+
 # -- the expert keeps every rule the narrator had ----------------------------
 
 
@@ -329,6 +393,38 @@ def test_the_speaker_survives_a_round_trip(index, repo):
     result = _run(index, _plan(), _turns((0, "What happens on a retry?", "The delay doubles.")))
     back = from_json(to_json(result.narration))
     assert [s.speaker for s in back.segments] == [s.speaker for s in result.narration.segments]
+
+
+# -- what the prompt asks for -----------------------------------------------
+
+
+def test_the_prompt_forbids_inventing_facts_and_inventing_a_world():
+    """The two things a model must not supply. Facts come from the beats; the
+    room is real or it is not mentioned. A fabricated anecdote about the weather
+    is a fabrication however charming, and it is the one kind this pipeline
+    cannot catch downstream — no anchor, no symbol, nothing to check it against."""
+    from kreb.render.dialogue import DIALOGUE_SYSTEM
+
+    assert "come from the beats below and nowhere else" in DIALOGUE_SYSTEM
+    assert "weather" in DIALOGUE_SYSTEM
+    assert "fabrication" in DIALOGUE_SYSTEM
+
+
+def test_the_prompt_does_not_police_style():
+    """Guidance shrank on purpose. Filler keeps a conversation moving out loud
+    even though it reads badly, so instructions against it were removed — and a
+    prompt that grows a taste rule back is the regression."""
+    from kreb.render.dialogue import DIALOGUE_SYSTEM
+
+    for banned in ("filler", "Great question", "metronome", "at most", "one sentence"):
+        assert banned not in DIALOGUE_SYSTEM
+
+
+def test_the_prompt_asks_for_real_speech():
+    from kreb.render.dialogue import DIALOGUE_SYSTEM
+
+    assert "hesitate" in DIALOGUE_SYSTEM
+    assert "uneven" in DIALOGUE_SYSTEM
 
 
 # -- the cast ---------------------------------------------------------------
