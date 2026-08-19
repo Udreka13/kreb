@@ -180,6 +180,44 @@ class Capabilities(Base):
         out.extend(self.notes)
         return out
 
+    def spoken_warnings(self) -> list[str]:
+        """The same facts, phrased for someone hearing them once.
+
+        A parallel method rather than a transformation of `warnings()`, because
+        "No pull-request evidence: forge unreachable." is not a sentence with
+        punctuation problems — it is a log line, and no rewriting rule turns a
+        log line into speech. Kept adjacent to `warnings()` so the two staying in
+        step is visible rather than remembered; a caveat that exists on the page
+        and not in the audio is a caveat the listener never gets.
+        """
+        out: list[str] = []
+        if self.git == "shallow":
+            out.append(
+                "This was a shallow clone, so there's no history here — "
+                "nothing about why any of it was built that way."
+            )
+        elif self.git == "unavailable":
+            out.append("There was no git history available at all.")
+        if self.forge in ("none", "rate_limited"):
+            out.append(
+                "It couldn't reach the forge"
+                + (", so there's no pull request evidence in any of this."
+                   if self.forge == "none"
+                   else " past the rate limit, so the pull request evidence is partial.")
+            )
+        if self.dirty:
+            out.append(
+                "The working tree had uncommitted changes, so everything here "
+                "was read at the pinned commit instead."
+            )
+        if self.degraded_files:
+            out.append(
+                f"And {self.degraded_files} files couldn't be indexed for symbols, "
+                "so anything touching those is unverified."
+            )
+        out.extend(self.notes)
+        return out
+
 
 class Document(Base):
     """A research document, and everything needed to judge it."""

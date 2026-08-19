@@ -104,8 +104,21 @@ class Critique:
         return round(sum(self.scores.values()) / len(self.scores), 2) if self.scores else 0.0
 
     @property
+    def complete(self) -> bool:
+        """Whether every axis was actually scored.
+
+        A judge that skips an axis is not a judge that found it unremarkable.
+        The first real run returned two of three and the mean of those two
+        landed exactly on the threshold, so a script the same judge called "too
+        clean" reported as good enough. Averaging over whatever came back hides
+        the gap; naming it does not.
+        """
+        return {name for name, _ in AXES} <= set(self.scores)
+
+    @property
     def good_enough(self) -> bool:
-        return self.ok and self.score >= GOOD_ENOUGH
+        """A passing score on a complete verdict. Both halves are load-bearing."""
+        return self.ok and self.complete and self.score >= GOOD_ENOUGH
 
 
 CRITIQUE_SYSTEM = """\
@@ -246,14 +259,19 @@ def _parse(text: str, script: str) -> Critique:
         else:
             invented += 1
 
+    notes = []
+    missing = sorted({name for name, _ in AXES} - set(scores))
+    if missing:
+        notes.append(f"the judge did not score {', '.join(missing)}")
     reason = ""
     if invented:
-        reason = (
+        notes.append(
             f"{invented} finding{'s' if invented > 1 else ''} quoted lines that are "
             "not in the script and were dropped"
         )
     return Critique(
-        scores=scores, findings=tuple(kept), summary=draft.summary, reason=reason
+        scores=scores, findings=tuple(kept), summary=draft.summary,
+        reason="; ".join(notes),
     )
 
 
@@ -262,6 +280,7 @@ def to_json(result: Critique) -> str:
         {
             "score": result.score,
             "good_enough": result.good_enough,
+            "complete": result.complete,
             "threshold": GOOD_ENOUGH,
             "scores": result.scores,
             "model": result.model,
@@ -279,7 +298,8 @@ def render(result: Critique) -> str:
     if not result.ok:
         return f"script not judged: {result.reason}"
     axes = "  ".join(f"{name} {result.scores.get(name, '-')}" for name, _ in AXES)
-    lines = [f"script {result.score}/5  ({axes})"]
+    partial = "" if result.complete else "  [partial verdict]"
+    lines = [f"script {result.score}/5  ({axes}){partial}"]
     if result.summary:
         lines.append(f"  {result.summary}")
     for finding in result.findings[:3]:

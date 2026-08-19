@@ -157,13 +157,22 @@ class BeatsDraft(BaseModel):
 def allowed_symbols(section: Section, index: RepoIndex) -> set[str]:
     """Symbol names this section's narration may use.
 
-    Drawn from what the section actually cites: each anchor's qualname, the
-    trailing component of it, and the file's stem. A narrator saying `resolve`
-    about a section anchored on `RepoIndex.resolve` is describing the cited
-    code; one who reaches for a symbol the section never cited is describing
-    code nobody checked.
+    Drawn from what the section actually cites — each anchor's qualname, the
+    trailing component of it, the file's stem — and from what the section itself
+    already says. A narrator saying `resolve` about a section anchored on
+    `RepoIndex.resolve` is describing the cited code; one who reaches for a
+    symbol the section never mentioned is describing code nobody checked.
+
+    The section's own prose counts, and the first real run is why. A section
+    titled `build_index`, anchored on `build_index`, opened with "it walks every
+    file and produces a `RepoIndex`" — and a beat repeating that was rejected for
+    naming `RepoIndex`. The symbol was Gate A's problem when the section was
+    written and it passed; re-litigating it here does not make the document
+    safer, it just stops the narration from saying what the document says.
     """
     names: set[str] = set()
+    names.update(indexed_identifiers(section.body, index))
+    names.update(indexed_identifiers(section.title, index))
     for anchor in all_anchors(section):
         names.add(anchor.qualname)
         names.update(part for part in anchor.qualname.split(".") if part)

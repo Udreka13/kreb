@@ -108,6 +108,10 @@ while they think. Turns are uneven — sometimes one word, sometimes a long
 stretch where the expert just runs with it. None of that reads well on a page
 and all of it is what makes audio sound like people rather than an announcement.
 
+Watch the host in particular. If every turn is built the same way — the same
+opener, the same rhythm, the same move — it stops sounding like a person and
+starts sounding like a form being filled in, however casual the words are.
+
 Two things are not yours to invent:
 
 Facts about the code come from the beats below and nowhere else. If a beat does
@@ -370,24 +374,24 @@ def _check_question(question: str, order: int, section, index: RepoIndex) -> str
 
 
 def _opening(plan: BeatsPlan) -> list[Segment]:
-    """The hook, computed rather than written.
+    """The host's question, and nothing answering it.
 
-    The host asks the document's own question verbatim and the expert says what
-    kind of answer is coming — not the answer itself. That restraint is
-    structural: a computed opening cannot be checked against a section, so
-    anything it asserted would be the one unanchored claim in the file.
+    An earlier version had the expert reply with a disclaimer — "everything here
+    comes from reading the code at one commit". The first real run showed what
+    that does: the model, having been given the same question as beat zero, asks
+    it again, and the script opens by asking one question twice with a non-answer
+    in between. The judge caught it before I did.
+
+    So the opening is the question alone. The expert's first words are the
+    model's, answering it for real, and the caveats that used to live here have
+    moved to the end where they were always going to be repeated anyway. This
+    also removes the last computed *claim* from the script: a computed line
+    cannot be checked against a section, so a question — which asserts nothing —
+    is the only thing that belongs here.
     """
     opener = plan.question.strip() or f"What is {plan.title}?"
     if not opener.endswith("?"):
         opener += "?"
-    # The title is deliberately not repeated back. `kreb doc` builds titles as
-    # "<repo>: <question>", so quoting it here makes the expert's first act
-    # reading the host's line back to them — and, when the question ends in a
-    # question mark, doing it with a stray "?." in the middle of a sentence.
-    reply = (
-        "Everything here comes from reading the code at one commit. "
-        "Where it is not sure, it says so."
-    )
     return [
         Segment(
             id="n000-open-q",
@@ -398,17 +402,7 @@ def _opening(plan: BeatsPlan) -> list[Segment]:
             kind="overview",
             role="opening",
             speaker=HOST,
-        ),
-        Segment(
-            id="n000-open",
-            section_id="",
-            beat_order=-1,
-            text=speakable(reply),
-            confidence="verified",
-            kind="overview",
-            role="opening",
-            speaker=EXPERT,
-        ),
+        )
     ]
 
 
@@ -421,7 +415,7 @@ def _closing(document: Document | None) -> list[Segment]:
     """
     if document is None:
         return []
-    warnings = list(document.capabilities.warnings())
+    warnings = list(document.capabilities.spoken_warnings())
     if not warnings:
         return []
     joined = " ".join(_for_the_ear(w).rstrip(".") + "." for w in warnings)

@@ -337,26 +337,25 @@ def test_the_opening_asks_the_documents_own_question(index, repo):
     result = _run(index, _plan(), _turns((0, "And after that?", "The delay doubles.")))
     assert result.ok
     opening = [s for s in result.narration.segments if s.role == "opening"]
+    assert len(opening) == 1
     assert opening[0].speaker == HOST
     assert opening[0].text == "How does backoff work?"
-    assert opening[1].speaker == EXPERT
 
 
-def test_the_opening_does_not_read_the_question_back(index, repo):
-    """`kreb doc` titles documents "<repo>: <question>", so quoting the title in
-    the reply makes the expert's first act repeating the host — and, since the
-    question ends in a question mark, doing it with a stray "?." mid-sentence."""
-    plan = BeatsPlan(
-        title="kreb: How does backoff work?",
-        question="How does backoff work?",
-        base_sha="abc",
-        beats=(_beat(),),
-    )
-    result = _run(index, plan, _turns((0, "What happens on a retry?", "The delay doubles.")))
+def test_nothing_computed_answers_the_opening_question(index, repo):
+    """Found by the judge on the first real run.
+
+    An expert reply here was a disclaimer rather than an answer, so the model —
+    handed the same question as beat zero — asked it again, and the script
+    opened by asking one question twice with a non-answer in between. The
+    expert's first words have to be the model's, answering for real.
+    """
+    result = _run(index, _plan(), _turns((0, "So what is it?", "It doubles the delay.")))
     assert result.ok
-    reply = [s for s in result.narration.segments if s.role == "opening"][1]
-    assert "How does backoff work" not in reply.text
-    assert "?." not in reply.text
+    segments = result.narration.segments
+    assert segments[0].speaker == HOST
+    assert segments[1].speaker == HOST  # beat zero's question, not a computed reply
+    assert segments[2].text == "It doubles the delay."
 
 
 def test_the_caveats_are_asked_for_and_then_spoken(index, repo):
@@ -369,6 +368,11 @@ def test_the_caveats_are_asked_for_and_then_spoken(index, repo):
     closing = [s for s in result.narration.segments if s.role == "closing"]
     assert [s.speaker for s in closing] == [HOST, EXPERT]
     assert closing[0].text.endswith("?")
+    # Spoken phrasing, not the page's. "Shallow clone: no history, so no
+    # rationale could be recovered." is a log line, and no punctuation fix turns
+    # a log line into a sentence someone says out loud.
+    assert "shallow clone" in closing[1].text.lower()
+    assert ":" not in closing[1].text
 
 
 def test_a_clean_run_gets_no_closing_exchange(index, repo):
@@ -425,6 +429,17 @@ def test_the_prompt_asks_for_real_speech():
 
     assert "hesitate" in DIALOGUE_SYSTEM
     assert "uneven" in DIALOGUE_SYSTEM
+
+
+def test_the_prompt_warns_against_a_host_with_one_move():
+    """The judge's finding on the first real run: five host turns in a row built
+    as "And the X —". Casual words in an identical frame still read as a form
+    being filled in, and nothing mechanical can catch it — so it is the prompt's
+    job, and the prompt losing it is the regression."""
+    from kreb.render.dialogue import DIALOGUE_SYSTEM
+
+    assert "Watch the host in particular" in DIALOGUE_SYSTEM
+    assert "form being filled in" in DIALOGUE_SYSTEM
 
 
 # -- the cast ---------------------------------------------------------------

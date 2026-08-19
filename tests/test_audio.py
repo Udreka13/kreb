@@ -213,6 +213,17 @@ def test_a_beat_naming_an_unknown_section_is_rejected(index, repo):
     assert any("`s9`" in r for r in result.rejections)
 
 
+def test_a_symbol_the_section_itself_names_is_licensed(index, repo):
+    """From the first real run: a section titled `build_index` and anchored on
+    it opened with "produces a `RepoIndex`", and a beat repeating that was
+    rejected for naming `RepoIndex`. The symbol was Gate A's problem when the
+    section was written and it passed — re-litigating it here does not make the
+    document safer, it stops the narration saying what the document says."""
+    section = _section(index, body="It calls `unrelated_helper` on the way out.")
+    assert "unrelated_helper" in allowed_symbols(section, index)
+    assert unlicensed_symbols("It calls unrelated_helper.", section, index) == set()
+
+
 def test_a_beat_may_not_name_a_symbol_its_section_never_cited(index, repo):
     """Set containment over the index, which is why this absence check is
     legitimate where 'does not sound like documentation' is not."""

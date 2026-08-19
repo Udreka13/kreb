@@ -83,6 +83,30 @@ def test_every_axis_is_kept_alongside_the_mean():
     assert result.score == 3.0
 
 
+def test_a_partial_verdict_is_never_good_enough():
+    """From the first real run. The judge returned two of three axes and the
+    mean of those two landed exactly on the threshold, so a script it had just
+    called "too clean" reported as good enough. Averaging over whatever came
+    back hides the gap."""
+    result = _judge(SCRIPT, _verdict(scores={"natural": 2, "coherent": 4}))
+    assert result.ok
+    assert not result.complete
+    assert result.score == 3.0
+    assert not result.good_enough
+    assert "did not score listenable" in result.reason
+
+
+def test_a_complete_verdict_at_the_threshold_passes():
+    result = _judge(SCRIPT, _verdict(scores={"natural": 3, "coherent": 3, "listenable": 3}))
+    assert result.complete
+    assert result.good_enough
+
+
+def test_a_partial_verdict_says_so_in_the_report():
+    text = render(_judge(SCRIPT, _verdict(scores={"natural": 4, "coherent": 4})))
+    assert "partial" in text
+
+
 def test_an_unknown_axis_is_ignored():
     result = _judge(SCRIPT, _verdict(scores={"natural": 4, "vibes": 5}))
     assert set(result.scores) <= {name for name, _ in AXES}

@@ -44,7 +44,7 @@ until they are green.
 | 11 | `progress/` event stream | **done** | 22 tests; stderr only, MCP-shaped |
 | 12 | `doc/gate_b` + worksheet | **done** | 23 tests; builds the sheet, scores nothing |
 | — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
-| 13 | `render/beats` + `render/narration` + `render/dialogue` + `render/critique` + `tts/` + audio | **done** | 126 tests; two-host, judged not gated |
+| 13 | `render/beats` + `render/narration` + `render/dialogue` + `render/critique` + `tts/` + audio | **done** | 131 tests; two-host, judged not gated |
 | 14 | `render/storyboard` + video | pending | consumes `beats` + `timings` |
 | 15 | `mcp/` | pending | deferred deliberately |
 
@@ -426,7 +426,21 @@ Carried from research; none blocks the build, all bear on whether it is worth it
    and unexercised by the corpus. A document that hedges nothing is either a
    confident document or a broken confidence signal, and that is worth knowing.
 
-6. **Is the judge worth its cost, and is it calibrated?** `GOOD_ENOUGH = 3.0`
+6. **The judge paid for itself on the first real run.** Three findings, and the
+   two worst were in computed segments rather than model output: a spoken
+   closing that read `No pull-request evidence: forge unreachable. 14 files had
+   no symbol index` — a log line nobody says aloud — and an opening where the
+   expert answered the document's question with a disclaimer, so the model asked
+   the same question again two lines later. Both fixed: `spoken_warnings()` is a
+   parallel phrasing of `warnings()` for the ear, and the opening is now the
+   question alone, with the expert's first words being the model's. The third
+   finding was the model's — five host turns built as "And the X —" — and it is
+   the prompt's job, since nothing mechanical catches an identical frame around
+   casual words. A partial verdict also passed as good enough: the judge scored
+   two of three axes and the mean landed on the threshold, so `good_enough` now
+   requires a complete one.
+
+7. **Is the judge calibrated?** `GOOD_ENOUGH = 3.0`
    was chosen as "clearly mediocre", not tuned — nothing has enough runs behind
    it to tune against. Two things need a real run to answer: whether the scores
    track what a person would say about the same script, and whether a model
@@ -434,7 +448,7 @@ Carried from research; none blocks the build, all bear on whether it is worth it
    decorative. The honest fallback is human eval, and the critique's job is to
    make that cheap by pointing at specific lines rather than to replace it.
 
-7. **The hosted voice has never made a real request.** Built against the
+8. **The hosted voice has been used in anger once.** Built against the
    documented contract and the model listing, exercised end-to-end against real
    mp3 bytes through the real decode path, and never once called. Three things
    are unknown and only one keyed run answers all of them: whether
