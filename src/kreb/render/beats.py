@@ -41,6 +41,7 @@ from kreb.index.repo_index import RepoIndex
 from kreb.progress import Progress
 from kreb.provider.metered import MeteredProvider
 from kreb.provider.types import Message, Request
+from kreb.render.shape import Shape
 
 # A section long enough to need summarizing is also long enough to blow the
 # context on a twenty-section document. The model is choosing what to say about
@@ -214,8 +215,11 @@ what order, not writing the words a narrator will speak.
 Rules:
 - Every section of the document must get at least one beat. A section you found
   hard to summarize is usually the one worth hearing about.
-- Give a section two or three beats only when it genuinely carries that many
-  distinct points. Padding is worse than brevity.
+- Aim for the beat count you are given, by drawing more points out of each
+  section rather than by repeating one. A section that describes a mechanism has
+  a beat for what it does, one for how, one for the case that forced the design,
+  one for what it costs. Padding is worse than brevity — if the material is not
+  there, plan fewer.
 - Order beats so a listener who cannot scroll back still follows: what the thing
   is, then how it works, then why it was built that way.
 - You may reorder freely across sections. Document order is for readers.
@@ -228,14 +232,22 @@ Return JSON: {"beats": [{"section_id": "...", "key_point": "..."}, ...]}
 """
 
 
-def beats_user_prompt(document: Document) -> str:
+def beats_user_prompt(document: Document, shape: Shape | None = None) -> str:
     """The document as a menu of sections to draw beats from."""
     parts = [
         f"Document: {document.title}",
         f"Question it answers: {document.question}" if document.question else "",
-        "",
-        "Sections:",
     ]
+    if shape is not None:
+        # The beat count is where length is really set. Eight beats is five
+        # minutes no matter what the narration prompt asks for.
+        parts += [
+            "",
+            f"Plan about {shape.beats} beats — this becomes roughly "
+            f"{shape.minutes} minutes of audio for {shape.audience}. "
+            f"Choose points that let the expert get into {shape.detail}.",
+        ]
+    parts += ["", "Sections:"]
     for section in document.sections:
         body = section.body.strip()
         if len(body) > BODY_BUDGET:
@@ -259,11 +271,12 @@ def plan_beats(
     *,
     role: str = "narrate",
     max_attempts: int = 3,
+    shape: Shape | None = None,
     progress: Progress | None = None,
 ) -> BeatsResult:
     """Choose and order the points the spoken versions will make."""
     system = BEATS_SYSTEM
-    base_user = beats_user_prompt(document)
+    base_user = beats_user_prompt(document, shape)
     rejections: list[str] = []
     spent_before = provider.ledger.total(phase=provider.phase)
 

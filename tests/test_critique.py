@@ -232,6 +232,70 @@ def test_a_budget_ceiling_stops_the_judge_without_raising():
     assert "not judged" in result.reason
 
 
+# -- the revision note ------------------------------------------------------
+
+
+def test_the_revision_note_carries_only_quoted_lines():
+    """The whole reason this is allowed to exist. `research/writer.py` forbids
+    semantic rejection reasons, and a quoted finding is a step away from that:
+    it points at a line verifiably in the script. Closer to "this symbol does
+    not resolve" than to "this reads badly"."""
+    from kreb.render.critique import revision_note
+
+    result = _judge(SCRIPT, _verdict(
+        scores={"natural": 2, "coherent": 3, "listenable": 2},
+        summary="Sounds like a quiz throughout.",
+        findings=[{"quote": "The delay doubles each time.", "problem": "flat"}],
+    ))
+    note = revision_note(result)
+    assert "The delay doubles each time." in note
+    assert "flat" in note
+
+
+def test_the_revision_note_hides_the_score_and_the_summary():
+    """A model told it scored 2 out of 5 on "natural" has a target with no text
+    attached, and the cheapest way to move that number is to write something
+    blander no judge objects to."""
+    from kreb.render.critique import revision_note
+
+    result = _judge(SCRIPT, _verdict(
+        scores={"natural": 2, "coherent": 3, "listenable": 2},
+        summary="Sounds like a quiz throughout.",
+        findings=[{"quote": "The delay doubles each time.", "problem": "flat"}],
+    ))
+    note = revision_note(result)
+    assert "quiz" not in note
+    assert "2" not in note.replace("2 out of", "")
+
+
+def test_the_revision_note_warns_against_playing_safe():
+    """Models revise toward safe. A blander script that no judge objects to is
+    not an improvement, and the note has to say so."""
+    from kreb.render.critique import revision_note
+
+    result = _judge(SCRIPT, _verdict(
+        findings=[{"quote": "The delay doubles each time.", "problem": "flat"}]))
+    assert "safer script is not a better one" in revision_note(result)
+
+
+def test_no_findings_means_no_revision():
+    """Nothing to point at is nothing to fix, and a revision prompted by an
+    empty note is a second generation bought for nothing."""
+    from kreb.render.critique import revision_note
+
+    assert revision_note(_judge(SCRIPT, _verdict())) == ""
+
+
+def test_an_invented_finding_never_reaches_the_revision():
+    """Dropped upstream, so the writer is never handed a note about a line that
+    does not exist."""
+    from kreb.render.critique import revision_note
+
+    result = _judge(SCRIPT, _verdict(
+        findings=[{"quote": "Great question!", "problem": "filler"}]))
+    assert revision_note(result) == ""
+
+
 # -- the report -------------------------------------------------------------
 
 

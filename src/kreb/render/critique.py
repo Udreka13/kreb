@@ -275,6 +275,40 @@ def _parse(text: str, script: str) -> Critique:
     )
 
 
+def revision_note(result: Critique) -> str:
+    """The critique as an instruction to write it again, or "" if there is none.
+
+    Only the *quoted* findings go in, and that restriction is the whole reason
+    this is allowed to exist at all. `research/writer.py` sets the rule that no
+    rejection reason is ever a semantic judgement, because a model told "this
+    reads like documentation" stops sounding like documentation rather than
+    getting better. A quoted finding is a step away from that: it points at a
+    line that is verifiably in the script and says what is wrong with that line.
+    Closer to "this symbol does not resolve" than to "this reads badly".
+
+    The summary and the scores are deliberately left out. A model told it scored
+    2 out of 5 on "natural" has been handed a target with no text attached, and
+    the cheapest way to move that number is to write something blander that no
+    judge objects to. Lines it can point at are harder to game.
+
+    It is still not proof against laundering, which is why the revision pass is
+    opt-in and both drafts are kept: a revision that made the script worse has to
+    be visible, not silently blessed.
+    """
+    if not result.findings:
+        return ""
+    notes = "\n".join(
+        f'- "{f.quote}" — {f.problem}' for f in result.findings
+    )
+    return (
+        "\n\nYou have written this once already. A listener made these notes on "
+        "specific lines:\n"
+        f"{notes}\n"
+        "Write it again, fixing those lines. Keep what worked — this is a "
+        "revision, not a fresh start, and a safer script is not a better one."
+    )
+
+
 def to_json(result: Critique) -> str:
     return json.dumps(
         {

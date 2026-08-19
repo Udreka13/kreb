@@ -44,7 +44,7 @@ until they are green.
 | 11 | `progress/` event stream | **done** | 22 tests; stderr only, MCP-shaped |
 | 12 | `doc/gate_b` + worksheet | **done** | 23 tests; builds the sheet, scores nothing |
 | — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
-| 13 | `render/beats` + `render/narration` + `render/dialogue` + `render/critique` + `tts/` + audio | **done** | 131 tests; two-host, judged not gated |
+| 13 | `render/beats` + `render/narration` + `render/dialogue` + `render/critique` + `tts/` + audio | **done** | 154 tests; presets, two-host, judged not gated |
 | 14 | `render/storyboard` + video | pending | consumes `beats` + `timings` |
 | 15 | `mcp/` | pending | deferred deliberately |
 
@@ -324,6 +324,35 @@ Recorded so they are not relitigated:
   the words are the model's, the segmentation is ours. Host turns are never
   split — "Wait, hang on. Not even a little?" is three sentences and one breath,
   and cutting it puts a scene boundary inside a single thought.
+- **Length is decided in `beats`, not in narration.** The first real run made
+  the arithmetic concrete: 8 sections became 8 beats, 784 words, 4.8 minutes, at
+  a measured 164 wpm. Forty minutes is ~6,500 words is ~67 beats, so a length
+  target that only reached the narration prompt would produce eight padded beats
+  — the same script read slower. `render/shape.py` carries three presets
+  (`quick` 5min / `standard` 15min / `deep` 40min) and the beat count reaches the
+  planner. `quick` computes to exactly the 8 beats the real run produced, which
+  is the only reason the other two can be trusted to scale.
+- **Depth and length are one knob.** They are not independent: a document holds
+  only so much surface-level material, so a long shallow script repeats itself
+  and a deep five-minute one is a list of mechanisms with no room to explain any.
+  Each preset names an audience and what the expert reaches for, and the word
+  count is a *target* in the prompt — never a check, because rejecting a script
+  for length would be enforcing a budget on writing.
+- **The critique can be handed back, but only its quoted lines.** `--revise`
+  runs one rewrite from the findings, and the scores and summary are withheld: a
+  model told it scored 2 on "natural" has a target with no text attached, and the
+  cheapest way to move it is to write something blander no judge objects to. A
+  quoted finding points at a line verifiably in the script, which is closer to
+  "this symbol does not resolve" than to "this reads badly". It stays opt-in and
+  both drafts are kept (`narration.draft.json`, `critique.draft.json`), because
+  models revise toward safe and a revision that made things worse has to be
+  visible rather than silently blessed.
+- **The computed opening defers to the model's.** The prompt now asks for a real
+  podcast opening, so beat zero usually arrives as one; prepending a bare
+  question in front of that gives two openings. `_covers` checks content-word
+  overlap — approximate on purpose, since the cost of being wrong is one
+  redundant sentence, not a wrong claim. A script that dives straight into
+  mechanism still gets the question.
 - **The judge has to agree with the writer about what good audio is.** Scoring
   "substance" penalized filler, which would have pulled scripts back toward the
   stilted thing the prompt stopped asking for. The axes are now natural /

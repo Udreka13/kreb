@@ -442,6 +442,78 @@ def test_the_prompt_warns_against_a_host_with_one_move():
     assert "form being filled in" in DIALOGUE_SYSTEM
 
 
+def test_the_prompt_asks_for_a_real_opening():
+    """A listener who has just pressed play knows nothing — not even what kind
+    of thing is being discussed."""
+    from kreb.render.dialogue import DIALOGUE_SYSTEM
+
+    assert "Open the way a podcast opens" in DIALOGUE_SYSTEM
+    assert "just pressed play" in DIALOGUE_SYSTEM
+
+
+def test_the_prompt_says_the_host_is_not_a_stooge():
+    """A host whose only job is to introduce the next section is the fastest way
+    to make this sound generated, and it is what the first real run sounded
+    like."""
+    from kreb.render.dialogue import DIALOGUE_SYSTEM
+
+    assert "not a stooge" in DIALOGUE_SYSTEM
+    assert "hand-waving" in DIALOGUE_SYSTEM
+
+
+def test_the_shape_brief_reaches_the_system_prompt():
+    from kreb.render.dialogue import system_prompt
+    from kreb.render.shape import shape_for
+
+    text = system_prompt(shape_for("deep"))
+    assert "40 minutes" in text
+    assert "6,560" in text
+    assert "{brief}" not in text
+
+
+def test_no_shape_leaves_no_placeholder_behind():
+    """A literal "{brief}" reaching a model is a prompt bug that reads as an
+    instruction."""
+    from kreb.render.dialogue import system_prompt
+
+    assert "{brief}" not in system_prompt(None)
+
+
+# -- the opening defers to the model ----------------------------------------
+
+
+def test_a_script_that_opens_itself_gets_no_prepended_question(index, repo):
+    """The prompt now asks for a real opening, so beat zero usually arrives as
+    one. Prepending a bare question in front of that gives you two openings —
+    and the near miss is what the first real run did: asked, then asked again."""
+    result = _run(
+        index, _plan(),
+        _turns((0, "So how does backoff work in this thing?", "The delay doubles.")),
+    )
+    assert result.ok
+    assert [s.role for s in result.narration.segments].count("opening") == 0
+    assert result.narration.segments[0].text.startswith("So how does backoff work")
+
+
+def test_a_script_that_dives_in_still_gets_the_question(index, repo):
+    """A listener who has just pressed play does not know what they are
+    listening to, so a script starting mid-mechanism needs the frame."""
+    result = _run(index, _plan(), _turns((0, "", "The delay doubles each attempt.")))
+    assert result.ok
+    opening = [s for s in result.narration.segments if s.role == "opening"]
+    assert len(opening) == 1
+    assert opening[0].text == "How does backoff work?"
+
+
+def test_the_overlap_check_is_not_an_exact_match():
+    """A model asked to open a podcast writes "so what does this thing actually
+    do, end to end?" and never the question verbatim."""
+    from kreb.render.dialogue import _covers
+
+    assert _covers("So how does the backoff actually work here?", "How does backoff work?")
+    assert not _covers("Right, and where are the symbols kept?", "How does backoff work?")
+
+
 # -- the cast ---------------------------------------------------------------
 
 

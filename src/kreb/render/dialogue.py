@@ -60,6 +60,7 @@ from kreb.prose import split_sentences
 from kreb.provider.metered import MeteredProvider
 from kreb.provider.types import Message, Request
 from kreb.render.beats import BeatsPlan, unlicensed_symbols
+from kreb.render.shape import Shape, brief
 from kreb.render.narration import (
     _FENCE,
     BACKGROUND_PREFIX,
@@ -102,6 +103,16 @@ DIALOGUE_SYSTEM = """\
 Write a podcast conversation about a codebase. Two people: a host who wants to
 understand it, and an expert who has read it.
 
+Open the way a podcast opens. Say what this is, why anyone would care, and what
+the conversation is going to get into — then get into it. A listener who has
+just pressed play knows nothing, not even what kind of thing is being discussed.
+
+The host is not a beginner and not a stooge. They have written plenty of code
+and have not read this codebase. They can hear when an answer is hand-waving,
+they compare things to what they already know, they follow up on the interesting
+half of an answer rather than moving to the next topic. A host whose only job is
+to introduce the next section is the fastest way to make this sound generated.
+
 Make it sound like a real recording. People hesitate, repeat themselves, start
 over, trail off, laugh, warm up before getting to the point, say "right, right"
 while they think. Turns are uneven — sometimes one word, sometimes a long
@@ -124,6 +135,8 @@ fabrication however charming it is. Small talk that claims nothing is fine.
 Say names the way you would out loud, and use no markdown — this is speech, not
 a page.
 
+{brief}
+
 Where a beat says HEDGE REQUIRED, the expert has to sound unsure out loud:
 "probably", "likely", "seems", "may". Doubt a listener cannot hear is not doubt.
 
@@ -131,6 +144,16 @@ Return JSON: {"turns": [{"order": <beat order>, "host": "...", "expert": "..."}]
 Every beat needs its expert turn. "host" is optional — leave it out when the
 expert simply keeps going.
 """
+
+
+def system_prompt(shape: Shape | None) -> str:
+    """The system prompt with the shape's brief folded in.
+
+    A function rather than a constant because the brief is the only part that
+    varies, and threading a second message through would make the length target
+    a thing the model could weigh against the rest rather than part of the job.
+    """
+    return DIALOGUE_SYSTEM.replace("{brief}", brief(shape) if shape else "")
 
 
 def dialogue_user_prompt(plan: BeatsPlan) -> str:
@@ -162,6 +185,8 @@ def write_dialogue(
     document: Document | None = None,
     role: str = "narrate",
     max_attempts: int = 3,
+    shape: Shape | None = None,
+    revision: str = "",
     progress: Progress | None = None,
 ) -> NarrationResult:
     """Expand a beat plan into a two-speaker script.
@@ -171,7 +196,7 @@ def write_dialogue(
     where cost accounting lives and a second copy that drifts is a second
     ledger that under-counts.
     """
-    base_user = dialogue_user_prompt(plan)
+    base_user = dialogue_user_prompt(plan) + revision
     rejections: list[str] = []
     spent_before = provider.ledger.total(phase=provider.phase)
 
@@ -181,7 +206,7 @@ def write_dialogue(
         user = base_user + (_retry_suffix(rejections[-4:]) if rejections else "")
         completion = provider.inner.complete(
             Request(
-                messages=(Message("system", DIALOGUE_SYSTEM), Message("user", user)),
+                messages=(Message("system", system_prompt(shape)), Message("user", user)),
                 role=role,  # type: ignore[arg-type]
                 unit="dialogue",
                 response_format={"type": "json_object"},
@@ -308,7 +333,7 @@ def _evaluate(
             title=plan.title,
             question=plan.question,
             base_sha=plan.base_sha,
-            segments=tuple(_opening(plan) + segments + _closing(document)),
+            segments=tuple(_opening(plan, segments) + segments + _closing(document)),
         ),
         [],
     )
@@ -373,25 +398,26 @@ def _check_question(question: str, order: int, section, index: RepoIndex) -> str
     return ""
 
 
-def _opening(plan: BeatsPlan) -> list[Segment]:
-    """The host's question, and nothing answering it.
+def _opening(plan: BeatsPlan, segments: list[Segment]) -> list[Segment]:
+    """The document's question, spoken — unless the script already opens itself.
 
-    An earlier version had the expert reply with a disclaimer — "everything here
-    comes from reading the code at one commit". The first real run showed what
-    that does: the model, having been given the same question as beat zero, asks
-    it again, and the script opens by asking one question twice with a non-answer
-    in between. The judge caught it before I did.
+    The prompt now asks for a real podcast opening, so beat zero usually arrives
+    as one. Prepending a bare question in front of that gives you two openings,
+    and the first real run showed what the near miss costs: the model, handed the
+    same question it had just been asked, asked it again.
 
-    So the opening is the question alone. The expert's first words are the
-    model's, answering it for real, and the caveats that used to live here have
-    moved to the end where they were always going to be repeated anyway. This
-    also removes the last computed *claim* from the script: a computed line
-    cannot be checked against a section, so a question — which asserts nothing —
-    is the only thing that belongs here.
+    So this defers. If the script's first host turn already carries the question,
+    the model's version wins — it has context this cannot have. Only a script
+    that dives straight into mechanism gets the question prepended, because a
+    listener who has just pressed play does not know what they are listening to.
     """
     opener = plan.question.strip() or f"What is {plan.title}?"
     if not opener.endswith("?"):
         opener += "?"
+
+    if segments and _covers(segments[0].text, opener):
+        return []
+
     return [
         Segment(
             id="n000-open-q",
@@ -404,6 +430,25 @@ def _opening(plan: BeatsPlan) -> list[Segment]:
             speaker=HOST,
         )
     ]
+
+
+def _covers(text: str, question: str) -> bool:
+    """Whether an opening line already does the question's job.
+
+    Content-word overlap rather than an exact match, because a model asked to
+    open a podcast writes "so what does this thing actually do, end to end?" and
+    never the question verbatim. Cheap and approximate on purpose: the cost of
+    being wrong is one redundant sentence at the top, not a wrong claim.
+    """
+    stop = {
+        "what", "does", "this", "the", "a", "an", "is", "are", "do", "how", "why",
+        "it", "that", "of", "in", "to", "for", "and", "so", "actually", "about",
+    }
+    wanted = {w.strip(".,?!-—") for w in question.lower().split()} - stop
+    if not wanted:
+        return True
+    have = {w.strip(".,?!-—") for w in text.lower().split()}
+    return len(wanted & have) >= max(1, len(wanted) // 2)
 
 
 def _closing(document: Document | None) -> list[Segment]:

@@ -310,9 +310,16 @@ def cmd_audio(args) -> int:
     from kreb.render import dialogue as dialogue_mod
     from kreb.render import narration as narration_mod
     from kreb.render.audio import build_audio, timings_json
+    from kreb.render.shape import shape_for
 
     try:
         engine = engine_for(args)
+    except ValueError as exc:
+        print(f"kreb audio: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        shape = shape_for(args.preset)
     except ValueError as exc:
         print(f"kreb audio: {exc}", file=sys.stderr)
         return 2
@@ -383,7 +390,7 @@ def cmd_audio(args) -> int:
         )
 
         progress.emit("beats_started", "planning what to say", total=len(doc.sections))
-        planned = beats_mod.plan_beats(doc, index, provider, progress=progress)
+        planned = beats_mod.plan_beats(doc, index, provider, shape=shape, progress=progress)
         if not planned.ok:
             print("could not plan beats:", file=sys.stderr)
             for reason in planned.rejections[-4:]:
@@ -398,23 +405,60 @@ def cmd_audio(args) -> int:
             if args.style == "dialogue"
             else narration_mod.write_narration
         )
-        written = write(plan, index, provider, document=doc, progress=progress)
+        kwargs = {"document": doc, "progress": progress}
+        if args.style == "dialogue":
+            kwargs["shape"] = shape
+        written = write(plan, index, provider, **kwargs)
         if not written.ok:
             print("could not write narration:", file=sys.stderr)
             for reason in written.rejections[-4:]:
                 print(f"  - {reason}", file=sys.stderr)
             return 1
         narration = written.narration
-        narration_path.write_text(narration_mod.to_json(narration), encoding="utf-8")
         spent = planned.cost + written.cost
 
+        judged = None
         if not args.no_critique:
             judged = critique_mod.critique(narration, provider, progress=progress)
+            spent += judged.cost
+            print(critique_mod.render(judged), file=sys.stderr)
+
+        # One revision, and only from findings that quote the script. Both
+        # drafts are kept because a revision that made things worse has to be
+        # visible: models revise toward safe, and a blander script that no judge
+        # objects to is not an improvement.
+        note = critique_mod.revision_note(judged) if judged is not None else ""
+        if args.revise and note and args.style == "dialogue":
+            (out_dir / "narration.draft.json").write_text(
+                narration_mod.to_json(narration), encoding="utf-8"
+            )
+            (out_dir / "critique.draft.json").write_text(
+                critique_mod.to_json(judged), encoding="utf-8"
+            )
+            progress.emit("revision_started", "rewriting from the notes",
+                          total=len(judged.findings))
+            again = write(plan, index, provider, revision=note, **kwargs)
+            if again.ok:
+                narration = again.narration
+                spent += again.cost
+                judged = critique_mod.critique(narration, provider, progress=progress)
+                spent += judged.cost
+                print("after revision:", file=sys.stderr)
+                print(critique_mod.render(judged), file=sys.stderr)
+            else:
+                # The first script was valid and this one is not, so the run
+                # keeps what it had rather than losing a good draft to a bad
+                # rewrite. Said out loud: silence here looks like it worked.
+                print("revision rejected, keeping the first draft:", file=sys.stderr)
+                for reason in again.rejections[-2:]:
+                    print(f"  - {reason}", file=sys.stderr)
+                spent += again.cost
+
+        narration_path.write_text(narration_mod.to_json(narration), encoding="utf-8")
+        if judged is not None:
             (out_dir / "critique.json").write_text(
                 critique_mod.to_json(judged), encoding="utf-8"
             )
-            spent += judged.cost
-            print(critique_mod.render(judged), file=sys.stderr)
 
     script = (
         dialogue_mod.transcript(narration)
@@ -729,6 +773,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Imported here rather than at module scope to keep `kreb --help` from
     # loading the speech stack, and imported rather than restated so the default
     # cannot drift from the engine's.
+    from kreb.render.shape import DEFAULT as SHAPE_DEFAULT
+    from kreb.render.shape import PRESETS as SHAPE_PRESETS
     from kreb.tts.openrouter import DEFAULT_MODEL as DEFAULT_VOICE
 
     parser = argparse.ArgumentParser(prog="kreb", description=__doc__.split("\n")[0])
@@ -802,6 +848,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_audio.add_argument(
         "--speed", type=float, default=1.0, help="hosted speaking rate, 1.0 is normal"
+    )
+    p_audio.add_argument(
+        "--preset",
+        default=SHAPE_DEFAULT,
+        choices=sorted(SHAPE_PRESETS),
+        help="quick (~5 min, overview) · standard (~15 min) · deep (~40 min, mechanism)",
+    )
+    p_audio.add_argument(
+        "--revise",
+        action="store_true",
+        help="rewrite the script once from the judge's quoted notes, keeping both drafts",
     )
     p_audio.add_argument(
         "--no-critique",
