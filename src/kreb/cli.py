@@ -306,6 +306,7 @@ def cmd_audio(args) -> int:
     from kreb.provider.metered import MeteredProvider
     from kreb.provider.openrouter import OpenRouterProvider
     from kreb.render import beats as beats_mod
+    from kreb.render import critique as critique_mod
     from kreb.render import dialogue as dialogue_mod
     from kreb.render import narration as narration_mod
     from kreb.render.audio import build_audio, timings_json
@@ -406,6 +407,14 @@ def cmd_audio(args) -> int:
         narration = written.narration
         narration_path.write_text(narration_mod.to_json(narration), encoding="utf-8")
         spent = planned.cost + written.cost
+
+        if not args.no_critique:
+            judged = critique_mod.critique(narration, provider, progress=progress)
+            (out_dir / "critique.json").write_text(
+                critique_mod.to_json(judged), encoding="utf-8"
+            )
+            spent += judged.cost
+            print(critique_mod.render(judged), file=sys.stderr)
 
     script = (
         dialogue_mod.transcript(narration)
@@ -793,6 +802,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_audio.add_argument(
         "--speed", type=float, default=1.0, help="hosted speaking rate, 1.0 is normal"
+    )
+    p_audio.add_argument(
+        "--no-critique",
+        action="store_true",
+        help="skip the coherence judge that scores a newly written script",
     )
     p_audio.add_argument(
         "--style",

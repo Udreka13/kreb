@@ -11,25 +11,33 @@ listener is already forming supplies the connective tissue the monologue is
 forbidden from having — and supplies it without the expert's lines losing their
 independence, because the question is a separate turn.
 
-That split is also the entire safety argument, and it is worth stating plainly.
+What is checked here, and what deliberately is not, is the whole design.
+
+An earlier version made the host end every turn in a question mark, capped it at
+one sentence, and demanded at least one question per script. Those are style
+rules dressed as validators, and they produce exactly the output they look like
+they prevent: a metronome of clipped interrogatives that no person has ever
+spoken. Naturalness is not a property you can assert your way to — it comes from
+the prompt, and a modern model one-shots it given a good one. Those rules are
+gone.
+
+What remains is the fabrication guard, which is a different thing entirely.
 Every claim in this pipeline is anchored: it comes from a section, it inherits
 that section's confidence, and it may name only symbols that section cites. A
-second speaker is a second mouth that can make claims nobody checked. So the
-host does not get to make claims:
-
-    **A host turn must end in a question mark.**
-
-Positive, lexical, mechanically checkable — the same class of rule as "a
-speculative segment must contain a hedge", and enforceable for the same reason
-that "must not sound overconfident" is not. A host turn is also held to the
-symbol allowlist of the beat it introduces, capped at one sentence, and can only
-exist attached to a beat. There is no shape in the JSON for a host turn that
-floats free of an expert answer, so a host cannot get the last word on anything.
+second speaker is a second mouth, so the host is held to the same *symbol
+allowlist* as the expert — set containment against the index, not a judgement
+about tone. A host naming a symbol the section never cited is a fabricated
+anchor with a question mark after it, and it stays rejected.
 
 The expert carries every rule the monologue narrator carried: sentence cap,
 hedge-when-speculative, symbol allowlist, background signpost prepended. One
 expert turn per beat, still mandatory, so the coverage invariant `beats`
 enforces survives the second renderer.
+
+Coherence — does this sound like two people talking, does the question actually
+set up the answer — is judged in `render/critique.py` and *reported*, never fed
+back into this retry loop. `research/writer.py` states the reason: a rejection
+reason that is a semantic judgement teaches a model to dodge the judgement.
 """
 
 from __future__ import annotations
@@ -62,15 +70,6 @@ from kreb.render.narration import (
 HOST = "host"
 EXPERT = "expert"
 
-# A host turn is one sentence. Two-sentence questions are a monologue wearing a
-# question mark, and they are how a host starts making claims: the assertion
-# rides in the first sentence and the question mark lands on the second.
-MAX_HOST_SENTENCES = 1
-
-# At least one real question, or this is a monologue with the speaker labels
-# switched on — which would cost two voices and buy nothing.
-MIN_QUESTIONS = 1
-
 
 class TurnDraft(BaseModel):
     """One beat as an exchange. The host half is optional; the expert half is not.
@@ -94,37 +93,42 @@ class DialogueDraft(BaseModel):
 
 
 DIALOGUE_SYSTEM = """\
-You are writing a two-person conversation about a codebase, to be spoken aloud.
+You are writing a conversation between two people about a codebase, to be heard
+rather than read. Write it the way people actually talk.
 
-There are two speakers and they have different jobs.
+THE HOST has not read the code and is genuinely curious. The host says what a
+listener is thinking: asks the obvious question, pushes back when something
+sounds too neat, says "wait, why would you do that" when it is warranted, and
+sometimes just reacts — "huh", "that's the opposite of what I expected" — before
+asking anything. The host is allowed to be skeptical and allowed to be wrong.
 
-The HOST asks. The host is smart, curious, and has not read the code. The host
-says the thing the listener is thinking — including when that is a doubt, an
-objection, or "that sounds like everything else in this space". The host never
-explains, never asserts, and never answers. Every host turn is one sentence and
-ends in a question mark. That is a hard rule: a host turn that states something
-is a claim nobody checked, and it will be rejected.
+THE EXPERT has read the code and says what is actually there. Two sentences at
+most, one is often better. Answer the question that was asked, not a nearby one.
 
-The EXPERT answers. The expert has read the code and says what is actually
-there. Two sentences at most, one is often better. Say the thing; do not
-introduce it first.
+What makes this sound like people rather than a quiz:
+- The host does not ask a question every time. Sometimes the expert just keeps
+  going, and the host comes back in a couple of beats later. A question on every
+  beat is a metronome and it is instantly recognizable as machine-written.
+- Vary the shape. Not every host turn is an interrogative — "So that's why the
+  hashes are split." is a real thing a person says, and the expert can answer it.
+- Let the host's turn set up the answer that follows. A question the answer does
+  not address is worse than no question.
+- No filler that means nothing. "Great question" and "That's fascinating" are
+  what this fails as. React to the substance or say nothing.
 
 Both speakers:
-- Name only symbols the beat itself names. Adding one is a claim nobody checked.
+- Name only symbols the beat itself names. Adding one is a claim nobody checked,
+  and it applies to the host too — a question naming an invented function is
+  still an invention.
 - Speak names plainly — "the retry policy", not `RetryPolicy` spelled out.
 - No markdown, no backticks, no bullets, no headings. This is speech.
-
-Give a beat a host question when it earns one: when the point answers something
-a listener would actually wonder, when it contradicts what they would assume, or
-when the conversation has run several answers without a breath. Do not put a
-question on every beat — a metronome of questions is worse than none.
 
 Where a beat is marked HEDGE REQUIRED, the expert's line must sound uncertain
 out loud — "probably", "likely", "appears to", "may", "seems". Uncertainty a
 listener cannot hear is not uncertainty. Hedge in the answer, not the question.
 
 Return JSON: {"turns": [{"order": <beat order>, "host": "...", "expert": "..."}]}
-Omit "host" or leave it empty on beats that do not need a question.
+Omit "host" or leave it empty on beats where the expert simply continues.
 """
 
 
@@ -241,7 +245,6 @@ def _evaluate(
     sections = {s.id: s for s in document.sections} if document is not None else {}
     failures: list[str] = []
     segments: list[Segment] = []
-    questions = 0
 
     for beat in plan.beats:
         turn = turns.get(beat.order)
@@ -258,7 +261,6 @@ def _evaluate(
             if problem:
                 failures.append(problem)
                 continue
-            questions += 1
 
         count = len(split_sentences(answer))
         if count > MAX_SENTENCES:
@@ -316,12 +318,6 @@ def _evaluate(
             )
         )
 
-    if not failures and questions < MIN_QUESTIONS:
-        failures.append(
-            "the host never asked anything, which makes this a monologue with "
-            "speaker labels; give at least one beat a real question"
-        )
-
     if failures:
         return None, failures
 
@@ -337,32 +333,22 @@ def _evaluate(
 
 
 def _check_question(question: str, order: int, section, index: RepoIndex) -> str:
-    """The host's three rules, or "" if the turn is clean.
+    """The one rule the host still has, or "" if the turn is clean.
 
-    Returned as a string rather than raised or appended in place so the caller
-    keeps one failure per beat: a host turn that breaks two rules should not
-    push the expert's own failure off the retry prompt.
+    Only the symbol allowlist. Not because the host cannot say something silly,
+    but because "silly" is a judgement and this loop only rejects on things that
+    are mechanically true or false. A symbol the section never cited is that:
+    set containment against the index, the same check the expert gets.
     """
-    if not question.rstrip().endswith("?"):
+    if section is None:
+        return ""
+    stray = unlicensed_symbols(question, section, index)
+    if stray:
         return (
-            f"beat {order}: the host says {question[:60]!r}, which is a statement. "
-            "The host only asks — every host turn ends in a question mark, because "
-            "a host who states things is making claims nobody checked"
+            f"beat {order}: the host names "
+            f"{', '.join(f'`{s}`' for s in sorted(stray))}, which the beat's "
+            "section does not cite; ask it without them"
         )
-    count = len(split_sentences(question))
-    if count > MAX_HOST_SENTENCES:
-        return (
-            f"beat {order}: the host takes {count} sentences; a question is one. "
-            "Anything before the question mark is an assertion in disguise"
-        )
-    if section is not None:
-        stray = unlicensed_symbols(question, section, index)
-        if stray:
-            return (
-                f"beat {order}: the host names "
-                f"{', '.join(f'`{s}`' for s in sorted(stray))}, which the beat's "
-                "section does not cite; ask it without them"
-            )
     return ""
 
 

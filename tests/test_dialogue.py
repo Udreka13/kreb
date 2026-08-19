@@ -1,11 +1,15 @@
 """The two-host renderer and the cast that voices it.
 
-The load-bearing test here is `test_a_host_who_states_something_is_rejected`.
-Every claim in this pipeline is anchored to a section, inherits its confidence,
-and may name only symbols that section cites. A second speaker is a second mouth
-that can make claims nobody checked, and the question-mark rule is the whole
-thing standing between the host and an unanchored assertion. It is enforceable
-for exactly the reason the hedge rule is: it is positive and lexical.
+The load-bearing test is `test_a_host_may_not_name_a_symbol_the_section_never_cited`.
+A second speaker is a second mouth that can name things that do not exist, and
+the symbol allowlist is set containment against the index — mechanically true or
+false, which is why it belongs in the retry loop.
+
+What is deliberately *not* tested here is how the script sounds. An earlier
+version made the host end every turn in a question mark and capped it at one
+sentence; those rules produced the stilted output they looked like they
+prevented. Naturalness comes from the prompt and is judged in
+`tests/test_critique.py`, where the verdict is a report rather than a gate.
 """
 
 from __future__ import annotations
@@ -21,13 +25,7 @@ from kreb.index.repo_index import build_index
 from kreb.media import check_tools
 from kreb.render.audio import build_audio, segment_key
 from kreb.render.beats import Beat, BeatsPlan
-from kreb.render.dialogue import (
-    EXPERT,
-    HOST,
-    MAX_HOST_SENTENCES,
-    transcript,
-    write_dialogue,
-)
+from kreb.render.dialogue import EXPERT, HOST, transcript, write_dialogue
 from kreb.render.narration import BACKGROUND_PREFIX, from_json, to_json
 from kreb.repo.access import Repository
 from kreb.tts.cast import Cast, as_cast
@@ -130,42 +128,13 @@ def _run(index, plan, *payloads, document=None):
     )
 
 
-# -- the host may only ask --------------------------------------------------
-
-
-def test_a_host_who_states_something_is_rejected(index, repo):
-    """The single rule that keeps a second speaker from making unanchored
-    claims. A host turn is checkable precisely because "ends in a question
-    mark" is positive and lexical, where "does not assert" is not."""
-    result = _run(
-        index,
-        _plan(),
-        _turns((0, "This is the clever part.", "The delay doubles.")),
-        _turns((0, "So what happens on a retry?", "The delay doubles.")),
-    )
-    assert result.ok
-    assert result.attempts == 2
-    assert any("statement" in r for r in result.rejections)
-
-
-def test_a_host_question_is_one_sentence(index, repo):
-    """Two-sentence questions are how an assertion rides in: the claim lands in
-    the first sentence and the question mark on the second."""
-    long_question = "The retry logic is broken. Is that fair?"
-    result = _run(
-        index,
-        _plan(),
-        _turns((0, long_question, "The delay doubles.")),
-        _turns((0, "Is that fair?", "The delay doubles.")),
-    )
-    assert result.ok
-    assert any("one" in r for r in result.rejections)
-    assert MAX_HOST_SENTENCES == 1
+# -- the host is held to the same symbols as the expert ----------------------
 
 
 def test_a_host_may_not_name_a_symbol_the_section_never_cited(index, repo):
-    """The allowlist binds both mouths. A question naming a symbol is still a
-    claim that the symbol exists and is relevant here."""
+    """The one rule the host still has. A question naming a symbol is still a
+    claim that the symbol exists and is relevant here — a fabricated anchor
+    with a question mark after it."""
     doc = _doc(index, _section(index))
     result = _run(
         index,
@@ -178,22 +147,46 @@ def test_a_host_may_not_name_a_symbol_the_section_never_cited(index, repo):
     assert any("unrelated_helper" in r for r in result.rejections)
 
 
-def test_a_host_with_no_question_at_all_is_rejected(index, repo):
-    """A dialogue where nobody asks anything is a monologue with speaker labels:
-    it costs a second voice and buys nothing."""
+def test_a_host_turn_need_not_be_a_question(index, repo):
+    """Statements from the host are legal now. "So that's why the hashes are
+    split." is a real thing a person says, and a validator that rejected it was
+    enforcing a style nobody asked for."""
+    result = _run(
+        index, _plan(), _turns((0, "So that's the whole trick.", "The delay doubles."))
+    )
+    assert result.ok
+    assert result.attempts == 1
+    assert _body(result.narration)[0].text == "So that's the whole trick."
+
+
+def test_a_host_may_take_more_than_one_sentence(index, repo):
+    """A person reacting before they ask is what a conversation sounds like."""
+    result = _run(
+        index,
+        _plan(),
+        _turns((0, "Huh. So what happens on a retry?", "The delay doubles.")),
+    )
+    assert result.ok
+    assert result.attempts == 1
+
+
+def test_a_script_where_nobody_asks_anything_is_accepted(index, repo):
+    """Judged, not rejected. Whether a script is a conversation or a monologue
+    with labels is a semantic question, and this loop only rejects on
+    mechanical ones."""
     result = _run(
         index,
         _plan(_beat(0), _beat(1)),
         _turns((0, "", "The delay doubles."), (1, "", "It is capped.")),
-        _turns((0, "What happens on a retry?", "The delay doubles."), (1, "", "It is capped.")),
     )
     assert result.ok
-    assert any("monologue" in r for r in result.rejections)
+    assert result.attempts == 1
 
 
 def test_a_beat_may_skip_its_question(index, repo):
-    """A question on every beat is a metronome. Only the *absence of all* of
-    them is a failure, so skipping one must stay legal."""
+    """Silence from the host is not a failure. A question on every beat is a
+    metronome, and the prompt asks for restraint rather than the validator
+    demanding participation."""
     result = _run(
         index,
         _plan(_beat(0), _beat(1)),

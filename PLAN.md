@@ -44,7 +44,7 @@ until they are green.
 | 11 | `progress/` event stream | **done** | 22 tests; stderr only, MCP-shaped |
 | 12 | `doc/gate_b` + worksheet | **done** | 23 tests; builds the sheet, scores nothing |
 | — | **Gate B** | **next** | **stop-or-continue point** — needs a real API key |
-| 13 | `render/beats` + `render/narration` + `render/dialogue` + `tts/` + audio | **done** | 99 tests; two-host by default |
+| 13 | `render/beats` + `render/narration` + `render/dialogue` + `render/critique` + `tts/` + audio | **done** | 117 tests; two-host, judged not gated |
 | 14 | `render/storyboard` + video | pending | consumes `beats` + `timings` |
 | 15 | `mcp/` | pending | deferred deliberately |
 
@@ -301,14 +301,26 @@ Recorded so they are not relitigated:
   connective tissue the monologue is forbidden from having, without the expert's
   lines losing the independence the video renderer needs, because the question is
   a separate turn. `--style monologue` keeps the old shape.
-- **The host may only ask, and that is checked lexically.** A host turn must end
-  in a question mark, is capped at one sentence, is held to the beat's symbol
-  allowlist, and cannot exist in the JSON without the expert turn it introduces.
-  A second speaker is a second mouth that can make claims nobody checked; the
-  question-mark rule is the whole thing standing between the host and an
-  unanchored assertion — enforceable for the same reason the hedge rule is, and
-  the one-sentence cap exists because a two-sentence question is how an
-  assertion rides in ahead of the question mark.
+- **Naturalness comes from the prompt; only fabrication is validated.** The
+  first version made the host end every turn in a question mark, capped it at one
+  sentence, and required at least one question per script. Those are style rules
+  dressed as validators and they produce the stilted output they look like they
+  prevent — a metronome of clipped interrogatives. They are gone. What survives
+  is the *symbol allowlist*, which binds the host exactly as it binds the expert:
+  set containment against the index, mechanically true or false. A host naming a
+  symbol its section never cited is a fabricated anchor with a question mark
+  after it. The distinction is the general rule — validate what is checkable,
+  prompt for what is not.
+- **Coherence is judged by a model and reported, never fed back.**
+  `render/critique.py` scores a script 1–5 on natural / coherent / setup /
+  substance and writes `critique.json`. It is deliberately *not* in the retry
+  loop: `research/writer.py` sets the rule that no rejection reason is ever a
+  semantic judgement, because a model told "this sounds stilted" does not become
+  natural — it becomes something that does not read as stilted to the judge. Two
+  guards on the judge itself: it never sees the document, so it cannot reward a
+  script for agreeing with its source (that is Gate A's job, done with anchors),
+  and every finding must quote the script verbatim or it is dropped, because a
+  well-argued critique of a line nobody wrote is what a bad judge produces.
 - **`Cast` is itself a `SpeechEngine`, so one voice is a cast of one.** There is
   no second path through synthesis: same loop, same cache, same measurement,
   whether one person is talking or two. Its identity names every voice, so
@@ -396,13 +408,13 @@ Carried from research; none blocks the build, all bear on whether it is worth it
    and unexercised by the corpus. A document that hedges nothing is either a
    confident document or a broken confidence signal, and that is worth knowing.
 
-6. **Does the host actually ask what a listener would wonder?** The rules
-   guarantee the host asks *something* — a question mark, one sentence, no stray
-   symbols. None of that guarantees the question is a good one, and "asks what a
-   listener is thinking" is exactly the kind of negative semantic property this
-   project holds to be unenforceable. Nothing catches a metronome of "and what
-   about that?" beyond the prompt asking for better. Judge it on the first real
-   run, alongside Gate B.
+6. **Is the judge worth its cost, and is it calibrated?** `GOOD_ENOUGH = 3.0`
+   was chosen as "clearly mediocre", not tuned — nothing has enough runs behind
+   it to tune against. Two things need a real run to answer: whether the scores
+   track what a person would say about the same script, and whether a model
+   scoring its own sibling's output is generous in a way that makes the number
+   decorative. The honest fallback is human eval, and the critique's job is to
+   make that cheap by pointing at specific lines rather than to replace it.
 
 7. **The hosted voice has never made a real request.** Built against the
    documented contract and the model listing, exercised end-to-end against real
